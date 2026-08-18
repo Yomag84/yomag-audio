@@ -1,0 +1,40 @@
+.knob-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.knob {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--bg-surface-sunken);
+  border: 1px solid var(--border);
+  position: relative;
+  cursor: ns-resize;
+  touch-action: none;
+  flex-shrink: 0;
+}
+
+.knob-dial {
+  position: absolute;
+  inset: 3px;
+  border-radius: 50%;
+  border: 2px solid;
+  display: flex;
+  justify-content: center;
+}
+
+.knob-pointer {
+  width: 2px;
+  height: 42%;
+  margin-top: 2px;
+  border-radius: 1px;
+}
+
+.knob-label {
+  font-size: 9.5px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}

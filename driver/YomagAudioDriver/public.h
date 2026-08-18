@@ -12,8 +12,14 @@ DEFINE_GUID(CLSID_YomagMiniportTopology,
 
 // The single fixed PCM format this virtual cable supports. Keeping this to
 // one format avoids implementing WAVEFORMATEX range negotiation tables.
+// Both streaming pins (render/"input" and capture/"output" - see
+// MiniportWavePins in minwavecyclic.cpp) share this same data range, so
+// raising the channel count here widens the cable in both directions at
+// once: a client opening either side must request exactly this many
+// channels (IsSupportedFormat), same as it always had to for the format's
+// other fields.
 #define YOMAG_SAMPLES_PER_SEC   48000
-#define YOMAG_CHANNELS          2
+#define YOMAG_CHANNELS          32
 #define YOMAG_BITS_PER_SAMPLE   16
 #define YOMAG_BLOCK_ALIGN       (YOMAG_CHANNELS * (YOMAG_BITS_PER_SAMPLE / 8))
 #define YOMAG_AVG_BYTES_PER_SEC (YOMAG_SAMPLES_PER_SEC * YOMAG_BLOCK_ALIGN)

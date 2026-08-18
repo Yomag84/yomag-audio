@@ -26,9 +26,9 @@
 
 .cable-path {
   fill: none;
-  stroke: var(--primary);
+  stroke: var(--accent);
   stroke-width: 2;
-  opacity: 0.85;
+  opacity: 0.75;
 }
 
 .routing-column {
@@ -50,6 +50,7 @@
 
 .routing-column-header h3 {
   font-size: 14px;
+  font-weight: 700;
   margin-bottom: 2px;
 }
 
@@ -64,10 +65,10 @@
 }
 
 .add-control select {
-  background: #1a1a1a;
-  color: var(--text-light);
+  background: var(--bg-surface-alt);
+  color: var(--text-primary);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   font-size: 12px;
   padding: 4px 6px;
   max-width: 150px;
@@ -76,14 +77,15 @@
 .btn-icon {
   width: 24px;
   height: 24px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border);
-  background: var(--panel-bg);
-  color: var(--text-light);
+  background: var(--bg-surface);
+  color: var(--text-primary);
   cursor: pointer;
   font-size: 14px;
   line-height: 1;
   flex-shrink: 0;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
 
 .btn-icon:disabled {
@@ -92,7 +94,9 @@
 }
 
 .btn-icon:hover:not(:disabled) {
-  background: var(--primary);
+  background: var(--accent-gradient);
+  border-color: transparent;
+  color: var(--accent-contrast);
 }
 
 .routing-card-list {
@@ -103,13 +107,38 @@
 }
 
 .routing-card {
-  background: var(--panel-bg);
+  background: var(--bg-surface);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 10px;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  padding: 12px;
   /* Level meters and stats badges inside repaint every ~100ms; containment
      stops that from ever forcing a layout recalculation of sibling cards. */
   contain: layout paint;
+}
+
+.monitor-advanced-toggle {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 10px;
+  cursor: pointer;
+  transition: transform 0.15s, color 0.15s;
+}
+
+.monitor-advanced-toggle:hover {
+  color: var(--text-primary);
+}
+
+.monitor-advanced-toggle.expanded {
+  transform: rotate(90deg);
+  color: var(--accent);
 }
 
 .routing-card-header {
@@ -122,7 +151,7 @@
 .routing-card-name {
   flex: 1;
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 700;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -155,7 +184,7 @@
 .mini-meter {
   flex: 1;
   height: 6px;
-  background: #111;
+  background: var(--bg-surface-alt);
   border-radius: 3px;
   overflow: hidden;
   border: 1px solid var(--border);
@@ -171,7 +200,7 @@
   height: 100%;
   transform: scaleX(0);
   transform-origin: left center;
-  background: linear-gradient(90deg, #4caf50 0%, #ffeb3b 75%, #f44336 100%);
+  background: linear-gradient(90deg, var(--success) 0%, var(--warning) 75%, var(--danger) 100%);
   /* Animate transform, not width: width is a layout property, so animating
      it on a dozen+ meters simultaneously every ~100ms forces a full layout
      pass each tick, which can visibly jitter neighboring UI. transform is
@@ -185,11 +214,11 @@
   height: 14px;
   min-width: 14px;
   border-radius: 50%;
-  background: #1a1a1a;
-  border: 2px solid var(--primary);
+  background: var(--bg-surface-alt);
+  border: 2px solid var(--accent);
   cursor: pointer;
   padding: 0;
-  transition: transform 0.1s, background 0.1s;
+  transition: transform 0.1s, background 0.1s, border-color 0.1s;
 }
 
 .channel-dot:hover {
@@ -197,17 +226,17 @@
 }
 
 .channel-dot.pending {
-  background: var(--primary);
-  box-shadow: 0 0 6px var(--primary);
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
 }
 
 .channel-dot.connectable:hover {
-  background: #ffeb3b;
-  border-color: #ffeb3b;
+  background: var(--warning);
+  border-color: var(--warning);
 }
 
 .channel-dot.connected {
-  background: var(--primary);
+  background: var(--accent);
 }
 
 .channel-dot.dot-in,
@@ -226,7 +255,7 @@
 }
 
 .stats-badge.warn {
-  color: #f44336;
+  color: var(--danger);
 }
 
 .exclusive-toggle {
@@ -240,7 +269,7 @@
 }
 
 .exclusive-toggle input {
-  accent-color: var(--primary);
+  accent-color: var(--accent);
 }
 
 .routing-card-footer {
@@ -254,7 +283,7 @@
 
 .routing-card-footer input[type="range"] {
   flex: 1;
-  accent-color: var(--primary);
+  accent-color: var(--accent);
 }
 
 .gain-label {
@@ -273,7 +302,7 @@
 
 .pending-hint {
   font-size: 12px;
-  color: var(--primary);
+  color: var(--accent);
 }
 
 .show-monitors-toggle {

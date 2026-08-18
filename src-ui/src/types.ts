@@ -91,3 +91,55 @@ export interface DeviceLevels {
 }
 
 export type LevelsEvent = Record<string, DeviceLevels>
+
+// --- Recording / editing -----------------------------------------------
+// Mirrors src-tauri/src/audio/recording.rs 1:1.
+
+export interface TrackManifest {
+  source_id: string
+  file: string
+  channels: number
+  sample_rate: number
+  duration_frames: number
+}
+
+export interface RecordingManifest {
+  session_id: string
+  device_id: string
+  device_name: string
+  name: string
+  created_at_ms: number
+  tracks: TrackManifest[]
+}
+
+export interface RecordingSummary {
+  session_id: string
+  name: string
+  device_name: string
+  created_at_ms: number
+  duration_ms: number
+  track_count: number
+}
+
+export interface Clip {
+  id: string
+  source_start_frame: number
+  length_frames: number
+  timeline_start_frame: number
+}
+
+export interface TrackProject {
+  source_id: string
+  gain: number
+  /** Stereo balance, -1 (full left) .. 1 (full right), 0 = center. */
+  pan: number
+  muted: boolean
+  solo: boolean
+  eq_bands: EqBand[]
+  clips: Clip[]
+}
+
+export interface RecordingProject {
+  session_id: string
+  tracks: TrackProject[]
+}

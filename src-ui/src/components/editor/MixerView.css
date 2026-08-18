@@ -1,0 +1,80 @@
+.mixer-view {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 18px;
+  overflow-x: auto;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.mixer-strip-column {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.mixer-strip {
+  width: 96px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.mixer-strip-color {
+  width: 100%;
+  height: 5px;
+  flex-shrink: 0;
+}
+
+.mixer-strip-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 8px 16px;
+}
+
+.mixer-strip-name {
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mixer-strip-buttons {
+  display: flex;
+  gap: 6px;
+}
+
+.mixer-fader-track {
+  height: 140px;
+  width: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.mixer-fader-track input[type="range"] {
+  width: 120px;
+  transform: rotate(-90deg);
+}
+
+.mixer-strip-gain-label {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}

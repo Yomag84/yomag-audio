@@ -6,6 +6,7 @@ mod loopback;
 mod mmcss;
 mod network;
 mod process_audio;
+pub mod recording;
 mod resampler;
 mod system_device;
 

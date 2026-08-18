@@ -32,7 +32,7 @@ confirmed it's stable.
 
 | File | Purpose |
 |---|---|
-| `public.h` | Miniport CLSIDs, pool tag, the one fixed PCM format (48kHz/16-bit/stereo) |
+| `public.h` | Miniport CLSIDs, pool tag, the one fixed PCM format (48kHz/16-bit/32-channel) |
 | `common.h` | Shared includes; `operator new`/`delete` overloads (WDM C++ has no CRT) |
 | `unknown.cpp` | `CUnknown` implementation — `stdunk.h` (installed with the WDK) declares this class but its `.cpp` only ships in the separate WDK *samples* repo, not the headers/libs alone, so this is a from-scratch, contract-compatible implementation |
 | `ringbuffer.h/.cpp` | The actual "cable" — spinlock-protected byte ring buffer bridging the render stream's DMA buffer to the capture stream's |
@@ -44,9 +44,20 @@ confirmed it's stable.
 
 ## Known scope limits (deliberate)
 
-- **One fixed format only** (48000 Hz / 16-bit / stereo). Anything else is
+- **One fixed format only** (48000 Hz / 16-bit / 32-channel, both the
+  render/"input" and capture/"output" streaming pins). Anything else is
   rejected in `SetFormat`/`NewStream` rather than attempting format
-  conversion in the driver.
+  conversion in the driver — a client must open the device with exactly
+  32 channels, not fewer. Changing `YOMAG_CHANNELS` in `public.h` is the
+  single point of control for this; every pin descriptor, buffer size, and
+  format check derives from it.
+- **Non-paged pool cost scales with the channel count.** At 32 channels
+  each device instance allocates three `YOMAG_CABLE_BUFFER_BYTES` buffers
+  (render DMA, capture DMA, the shared cable ring buffer) sized for 1
+  second of 48kHz/16-bit/32-channel audio each (~3MB), so roughly ~9MB of
+  non-paged pool per instance — worth knowing before creating many virtual
+  devices at once, since non-paged pool is a shared, finite system
+  resource.
 - **No jack description / advanced properties.** Real endpoint-surfacing
   polish (showing up exactly right in the Sound Control Panel with a nice
   icon, jack presence, etc.) often needs more property-handler

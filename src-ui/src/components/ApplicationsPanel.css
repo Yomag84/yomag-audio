@@ -20,10 +20,11 @@
 }
 
 .app-session-card {
-  background: var(--panel-bg);
+  background: var(--bg-surface);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  padding: 13px 15px;
 }
 
 .app-session-header {
@@ -35,7 +36,7 @@
 
 .app-session-name {
   font-size: 14px;
-  font-weight: 600;
+  font-weight: 700;
 }
 
 .app-session-meta {
@@ -56,14 +57,15 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 6px 10px;
-  background: #1a1a1a;
+  padding: 7px 11px;
+  background: var(--bg-surface-alt);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-pill);
 }
 
 .app-destination-chip.routed {
-  border-color: var(--primary);
+  border-color: var(--accent);
+  background: var(--accent-soft);
 }
 
 .app-destination-chip label {
@@ -76,7 +78,7 @@
 }
 
 .app-destination-chip input[type="checkbox"] {
-  accent-color: var(--primary);
+  accent-color: var(--accent);
 }
 
 .app-destination-controls {
@@ -87,4 +89,5 @@
 
 .app-destination-controls input[type="range"] {
   width: 90px;
+  accent-color: var(--accent);
 }

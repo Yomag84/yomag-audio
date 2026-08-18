@@ -1,0 +1,58 @@
+.editor-page {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg-app);
+}
+
+.editor-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 8px 18px 0;
+  background: var(--bg-app);
+  flex-shrink: 0;
+}
+
+.editor-tabs button {
+  padding: 7px 16px;
+  border: none;
+  border-radius: var(--radius-pill) var(--radius-pill) 0 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.editor-tabs button:hover {
+  color: var(--text-primary);
+}
+
+.editor-tabs button.active {
+  color: #fff;
+  background: var(--accent2);
+}
+
+.editor-export-message {
+  padding: 8px 18px;
+  font-size: 12px;
+  color: var(--accent2);
+  background: var(--accent2-soft);
+  border-bottom: 1px solid var(--border);
+}
+
+.editor-tracks {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 18px;
+}
+
+.editor-track-row {
+  display: flex;
+  flex-direction: column;
+}

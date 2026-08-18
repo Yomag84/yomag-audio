@@ -93,6 +93,20 @@ export function RoutingPanel({
   const [sourceToAdd, setSourceToAdd] = useState("")
   const [monitorToAdd, setMonitorToAdd] = useState("")
   const [paths, setPaths] = useState<{ key: string; d: string }[]>([])
+  // Exclusive mode + buffer/delay/EQ are advanced, rarely-touched settings -
+  // collapsed by default so a monitor card's common case (just wiring
+  // channels) isn't buried under them; closed for every monitor until the
+  // user explicitly expands one.
+  const [expandedMonitors, setExpandedMonitors] = useState<Set<string>>(new Set())
+
+  const toggleMonitorAdvanced = (name: string) => {
+    setExpandedMonitors((current) => {
+      const next = new Set(current)
+      if (next.has(name)) next.delete(name)
+      else next.add(name)
+      return next
+    })
+  }
 
   const containerRef = useRef<HTMLDivElement>(null)
   const sourceDotRefs = useRef(new Map<string, HTMLElement>())
@@ -383,34 +397,47 @@ export function RoutingPanel({
               </div>
             </div>
             <div className="routing-card-list">
-              {device.monitors.map((monitor) => (
+              {device.monitors.map((monitor) => {
+                const isAdvancedOpen = expandedMonitors.has(monitor.name)
+                return (
                 <div key={monitor.name} className="routing-card">
                   <div className="routing-card-header">
                     <span className="routing-card-name" title={monitor.name}>
                       {monitor.name}
                     </span>
                     <StatsBadge stats={monitorStats[monitor.name]} />
+                    <button
+                      className={`monitor-advanced-toggle ${isAdvancedOpen ? "expanded" : ""}`}
+                      onClick={() => toggleMonitorAdvanced(monitor.name)}
+                      title={isAdvancedOpen ? "Hide advanced settings" : "Show advanced settings (exclusive mode, buffer, delay, EQ)"}
+                    >
+                      ▸
+                    </button>
                     <button className="chip-remove" onClick={() => onRemoveMonitor(monitor.name)}>
                       ×
                     </button>
                   </div>
-                  <label
-                    className="exclusive-toggle"
-                    title="Open this device via WASAPI exclusive mode to reach its true channel count (e.g. a 16-channel virtual cable Windows is defaulting to fewer channels), at the cost of taking it away from every other app while active."
-                  >
-                    <input
-                      type="checkbox"
-                      checked={monitor.exclusive}
-                      onChange={(e) => onSetMonitorExclusive(monitor.name, e.target.checked)}
-                    />
-                    Exclusive mode ({monitor.channels}ch)
-                  </label>
-                  <MonitorSettingsPanel
-                    monitor={monitor}
-                    onSetBufferMs={(ms) => onSetMonitorBufferMs(monitor.name, ms)}
-                    onSetDelayMs={(ms) => onSetMonitorDelayMs(monitor.name, ms)}
-                    onSetEq={(bands) => onSetMonitorEq(monitor.name, bands)}
-                  />
+                  {isAdvancedOpen && (
+                    <>
+                      <label
+                        className="exclusive-toggle"
+                        title="Open this device via WASAPI exclusive mode to reach its true channel count (e.g. a 16-channel virtual cable Windows is defaulting to fewer channels), at the cost of taking it away from every other app while active."
+                      >
+                        <input
+                          type="checkbox"
+                          checked={monitor.exclusive}
+                          onChange={(e) => onSetMonitorExclusive(monitor.name, e.target.checked)}
+                        />
+                        Exclusive mode ({monitor.channels}ch)
+                      </label>
+                      <MonitorSettingsPanel
+                        monitor={monitor}
+                        onSetBufferMs={(ms) => onSetMonitorBufferMs(monitor.name, ms)}
+                        onSetDelayMs={(ms) => onSetMonitorDelayMs(monitor.name, ms)}
+                        onSetEq={(bands) => onSetMonitorEq(monitor.name, bands)}
+                      />
+                    </>
+                  )}
                   <div className="channel-rows">
                     {monitor.channel_map.map((sourceOutputChannel, mc) => {
                       const connected = sourceOutputChannel !== null
@@ -440,7 +467,8 @@ export function RoutingPanel({
                     })}
                   </div>
                 </div>
-              ))}
+                )
+              })}
               {device.monitors.length === 0 && <p className="routing-empty">Not monitoring anywhere</p>}
             </div>
           </section>

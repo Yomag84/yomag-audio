@@ -1,3 +1,4 @@
+use arc_swap::ArcSwap;
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::Stream;
 use parking_lot::Mutex;
@@ -5,6 +6,7 @@ use ringbuf::traits::{Consumer, Observer, Producer, Split};
 use ringbuf::{HeapCons, HeapProd, HeapRb};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -15,6 +17,7 @@ use super::eq::{EqBand, MultibandEq};
 use super::loopback::{LoopbackCapture, SYSTEM_AUDIO_SOURCE_NAME};
 use super::network::{NetworkManager, NetworkSubscription, PeerSnapshot, NETWORK_CHANNELS};
 use super::process_audio::{parse_app_source_id, ProcessLoopbackCapture};
+use super::recording;
 use super::resampler::LinearResampler;
 
 /// Fixed rate every source is resampled to and every mixer thread runs at.
@@ -114,7 +117,7 @@ const SOFT_LIMIT_CEILING: f32 = 0.98;
 /// `sample` (zero cost beyond the comparison); only genuine overs pay for
 /// the tanh, and even those approach but never reach +/-1.0.
 #[inline]
-fn soft_limit(sample: f32) -> f32 {
+pub(crate) fn soft_limit(sample: f32) -> f32 {
     let magnitude = sample.abs();
     if magnitude <= SOFT_LIMIT_CEILING {
         return sample;
@@ -172,19 +175,6 @@ impl StatsCounters {
     }
 }
 
-fn peaks_of(chunk: &[f32], channels: usize) -> Vec<f32> {
-    let mut peaks = vec![0.0f32; channels.max(1)];
-    for frame in chunk.chunks(channels.max(1)) {
-        for (c, &s) in frame.iter().enumerate() {
-            let a = s.abs();
-            if a > peaks[c] {
-                peaks[c] = a;
-            }
-        }
-    }
-    peaks
-}
-
 /// Per-channel peak store. Not a decaying peak-hold - each tick just
 /// overwrites with that tick's peak, which is plenty for a live meter at
 /// the ~100ms UI refresh rate this feeds.
@@ -199,8 +189,25 @@ impl LevelStore {
         }
     }
 
-    fn update(&self, chunk: &[f32], channels: usize) {
-        for (i, p) in peaks_of(chunk, channels).into_iter().enumerate() {
+    /// `peaks_scratch` is caller-owned and reused across calls (cleared and
+    /// resized here, which keeps its allocated capacity) instead of this
+    /// function allocating and returning a fresh `Vec` every call - same
+    /// "no heap churn on the mixer's real-time tick" reasoning as
+    /// `SourceEntry::scratch`, since this runs once per source plus once
+    /// for the device output every single mixer tick.
+    fn update(&self, chunk: &[f32], channels: usize, peaks_scratch: &mut Vec<f32>) {
+        let channels = channels.max(1);
+        peaks_scratch.clear();
+        peaks_scratch.resize(channels, 0.0);
+        for frame in chunk.chunks(channels) {
+            for (c, &s) in frame.iter().enumerate() {
+                let a = s.abs();
+                if a > peaks_scratch[c] {
+                    peaks_scratch[c] = a;
+                }
+            }
+        }
+        for (i, &p) in peaks_scratch.iter().enumerate() {
             if let Some(slot) = self.bits.get(i) {
                 slot.store(p.to_bits(), Ordering::Relaxed);
             }
@@ -309,6 +316,19 @@ struct SourceEntry {
     stats: Arc<StatsCounters>,
     gain: f32,
     muted: bool,
+    /// Per-tick pull buffer for this source, reused (via clear+resize,
+    /// which keeps allocated capacity) across mixer ticks instead of
+    /// allocating a fresh Vec every 5ms on the mixer's real-time thread.
+    scratch: Vec<f32>,
+    /// Scratch buffer for `levels.update`'s per-channel peak computation -
+    /// same reuse-across-ticks reasoning as `scratch`.
+    peak_scratch: Vec<f32>,
+    /// Installed by `VirtualDevice::start_recording` for the duration of
+    /// a take, removed by `stop_recording`/`remove_source`. Fed from
+    /// `mixer_loop` with this source's raw, pre-fader `scratch` each tick
+    /// (see mixer_loop) so a muted source still gets recorded and a gain
+    /// change mid-take doesn't affect the file on disk.
+    record_tap: Option<HeapProd<f32>>,
     _stream: SourceStream,
 }
 
@@ -330,7 +350,13 @@ pub struct VirtualDevice {
     enabled: bool,
     output_channels: usize,
     sources: Arc<Mutex<HashMap<String, SourceEntry>>>,
-    connections: Arc<Mutex<Vec<Connection>>>,
+    /// `ArcSwap` rather than `Mutex`: read on the mixer's real-time thread
+    /// every 5ms tick via a lock-free `load_full()` (an atomic pointer load
+    /// + refcount bump, no heap allocation), while edits from UI commands
+    /// build a whole new `Vec` and swap it in. A `Mutex<Vec<Connection>>>`
+    /// here previously meant locking plus cloning the entire routing table
+    /// on the mixer thread every single tick.
+    connections: Arc<ArcSwap<Vec<Connection>>>,
     output_levels: Arc<LevelStore>,
     /// Per monitor, which output_channel index feeds each of that
     /// monitor's own channels, or None if that channel hasn't been wired
@@ -357,12 +383,18 @@ pub struct VirtualDevice {
     /// with that monitor's live callback via `Arc<Mutex<_>>` so edits take
     /// effect immediately without restarting the stream - unlike buffer/
     /// delay, this doesn't change ring buffer sizing.
-    monitor_eq: HashMap<String, Arc<Mutex<Vec<EqBand>>>>,
+    /// Same `ArcSwap` rationale as `connections`: read every audio callback
+    /// on each monitor's own real-time thread.
+    monitor_eq: HashMap<String, Arc<ArcSwap<Vec<EqBand>>>>,
     monitor_producers: Arc<Mutex<HashMap<String, HeapProd<f32>>>>,
     monitor_streams: HashMap<String, MonitorStream>,
     mixer_stop: Option<Arc<AtomicBool>>,
     mixer_thread: Option<thread::JoinHandle<()>>,
     is_published: bool,
+    /// Set for the duration of a `start_recording`/`stop_recording` take.
+    /// See `audio::recording` for the writer-thread-per-source machinery
+    /// this owns.
+    active_recording: Option<recording::ActiveRecording>,
 }
 
 // cpal::Stream/LoopbackCapture wrap platform handles that are neither Send
@@ -381,7 +413,7 @@ impl VirtualDevice {
             enabled: false,
             output_channels: 2,
             sources: Arc::new(Mutex::new(HashMap::new())),
-            connections: Arc::new(Mutex::new(Vec::new())),
+            connections: Arc::new(ArcSwap::from_pointee(Vec::new())),
             output_levels: Arc::new(LevelStore::new(2)),
             monitor_channel_maps: HashMap::new(),
             monitor_stats: HashMap::new(),
@@ -394,6 +426,7 @@ impl VirtualDevice {
             mixer_stop: None,
             mixer_thread: None,
             is_published: false,
+            active_recording: None,
         }
     }
 
@@ -414,7 +447,7 @@ impl VirtualDevice {
                     muted: e.muted,
                 })
                 .collect(),
-            connections: self.connections.lock().clone(),
+            connections: self.connections.load_full().as_ref().clone(),
             monitors: self
                 .monitor_channel_maps
                 .iter()
@@ -434,7 +467,7 @@ impl VirtualDevice {
                         eq_bands: self
                             .monitor_eq
                             .get(name)
-                            .map(|a| a.lock().clone())
+                            .map(|a| a.load_full().as_ref().clone())
                             .unwrap_or_default(),
                     }
                 })
@@ -512,6 +545,9 @@ impl VirtualDevice {
                     stats: Arc::new(StatsCounters::new()),
                     gain: 1.0,
                     muted: false,
+                    scratch: Vec::new(),
+                    peak_scratch: Vec::new(),
+                    record_tap: None,
                     _stream: SourceStream::Loopback(capture),
                 },
             );
@@ -531,6 +567,9 @@ impl VirtualDevice {
                     stats: Arc::new(StatsCounters::new()),
                     gain: 1.0,
                     muted: false,
+                    scratch: Vec::new(),
+                    peak_scratch: Vec::new(),
+                    record_tap: None,
                     _stream: SourceStream::ProcessLoopback(capture),
                 },
             );
@@ -562,13 +601,14 @@ impl VirtualDevice {
         let levels = Arc::new(LevelStore::new(channels));
         let callback_levels = levels.clone();
         let mut resampled_buf: Vec<f32> = Vec::new();
+        let mut peak_scratch: Vec<f32> = Vec::new();
 
         let stream = input_device
             .build_input_stream(
                 &input_config,
                 move |data: &[f32], _info: &cpal::InputCallbackInfo| {
                     super::mmcss::promote_current_thread_to_pro_audio();
-                    callback_levels.update(data, channels);
+                    callback_levels.update(data, channels, &mut peak_scratch);
 
                     match resampler.as_mut() {
                         Some(r) => {
@@ -597,6 +637,9 @@ impl VirtualDevice {
                 stats: Arc::new(StatsCounters::new()),
                 gain: 1.0,
                 muted: false,
+                scratch: Vec::new(),
+                peak_scratch: Vec::new(),
+                record_tap: None,
                 _stream: SourceStream::Input(stream),
             },
         );
@@ -604,8 +647,102 @@ impl VirtualDevice {
     }
 
     pub fn remove_source(&mut self, source_id: &str) {
+        // If this source is part of an in-progress recording, finalize
+        // its track now rather than letting it be silently orphaned - the
+        // WAV file gets closed out at its actual duration instead of
+        // hanging around as an open file handle nothing will ever finish.
+        if let Some(active) = self.active_recording.as_mut() {
+            active.finalize_track(source_id);
+        }
         self.sources.lock().remove(source_id);
-        self.connections.lock().retain(|c| c.source_id != source_id);
+        let mut list = self.connections.load_full().as_ref().clone();
+        list.retain(|c| c.source_id != source_id);
+        self.connections.store(Arc::new(list));
+    }
+
+    /// Starts recording every source currently on this device to its own
+    /// WAV file under `base_dir/<session_id>/`. Sources added after this
+    /// call get no track (see module docs on `audio::recording`); a
+    /// source removed mid-session has its track finalized in
+    /// `remove_source` above.
+    pub fn start_recording(&mut self, base_dir: PathBuf, name: Option<String>) -> Result<String, String> {
+        if self.active_recording.is_some() {
+            return Err("A recording is already in progress on this device".to_string());
+        }
+
+        let mut sources = self.sources.lock();
+        if sources.is_empty() {
+            return Err("Device has no sources to record".to_string());
+        }
+
+        let session_id = recording::new_session_id();
+        let dir = base_dir.join(&session_id);
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+
+        let mut tracks = HashMap::new();
+        let mut installed_taps: Vec<String> = Vec::new();
+        let setup_result: Result<(), String> = (|| {
+            for (source_id, entry) in sources.iter_mut() {
+                let ring = HeapRb::<f32>::new(
+                    INTERNAL_SAMPLE_RATE as usize * entry.channels.max(1) * recording::RECORD_RING_SECONDS,
+                );
+                let (producer, consumer) = ring.split();
+                let track = recording::RecordingTrack::start(&dir, source_id, entry.channels, consumer)?;
+                entry.record_tap = Some(producer);
+                installed_taps.push(source_id.clone());
+                tracks.insert(source_id.clone(), track);
+            }
+            Ok(())
+        })();
+
+        if let Err(err) = setup_result {
+            // Roll back whatever taps we'd already wired in before the
+            // failure, and drop `tracks` (its writer threads stop+join via
+            // RecordingTrack's Drop) so a partial start never leaves the
+            // device half-recording.
+            for source_id in &installed_taps {
+                if let Some(entry) = sources.get_mut(source_id) {
+                    entry.record_tap = None;
+                }
+            }
+            drop(sources);
+            drop(tracks);
+            let _ = std::fs::remove_dir_all(&dir);
+            return Err(err);
+        }
+        drop(sources);
+
+        self.active_recording = Some(recording::ActiveRecording::new(
+            session_id.clone(),
+            dir,
+            name.unwrap_or_else(|| recording::default_recording_name(&self.name)),
+            self.id.clone(),
+            self.name.clone(),
+            tracks,
+        ));
+        Ok(session_id)
+    }
+
+    /// Stops the in-progress recording, if any, finalizing every
+    /// remaining track and writing `manifest.json`.
+    pub fn stop_recording(&mut self) -> Result<recording::RecordingSummary, String> {
+        let active = self
+            .active_recording
+            .take()
+            .ok_or_else(|| "No recording in progress on this device".to_string())?;
+
+        // Detach every tap first so the mixer stops pushing into ring
+        // buffers whose writer threads are about to be stopped/joined.
+        {
+            let mut sources = self.sources.lock();
+            for source_id in active.source_ids() {
+                if let Some(entry) = sources.get_mut(&source_id) {
+                    entry.record_tap = None;
+                }
+            }
+        }
+
+        active.finish().map(|manifest| recording::RecordingSummary::from_manifest(&manifest))
     }
 
     /// Subscribes to a LAN peer's published device and adds the incoming
@@ -632,6 +769,9 @@ impl VirtualDevice {
                 stats: Arc::new(StatsCounters::new()),
                 gain: 1.0,
                 muted: false,
+                scratch: Vec::new(),
+                peak_scratch: Vec::new(),
+                record_tap: None,
                 _stream: SourceStream::Network(subscription),
             },
         );
@@ -657,24 +797,27 @@ impl VirtualDevice {
     }
 
     pub fn set_connection(&mut self, connection: Connection) {
-        let mut connections = self.connections.lock();
-        if let Some(existing) = connections.iter_mut().find(|c| {
+        let mut list = self.connections.load_full().as_ref().clone();
+        if let Some(existing) = list.iter_mut().find(|c| {
             c.source_id == connection.source_id
                 && c.source_channel == connection.source_channel
                 && c.output_channel == connection.output_channel
         }) {
             existing.gain = connection.gain;
         } else {
-            connections.push(connection);
+            list.push(connection);
         }
+        self.connections.store(Arc::new(list));
     }
 
     pub fn remove_connection(&mut self, source_id: &str, source_channel: usize, output_channel: usize) {
-        self.connections.lock().retain(|c| {
+        let mut list = self.connections.load_full().as_ref().clone();
+        list.retain(|c| {
             !(c.source_id == source_id
                 && c.source_channel == source_channel
                 && c.output_channel == output_channel)
         });
+        self.connections.store(Arc::new(list));
     }
 
     pub fn add_monitor(&mut self, monitor_name: String) -> Result<(), String> {
@@ -700,7 +843,7 @@ impl VirtualDevice {
             .insert(monitor_name.clone(), DEFAULT_MONITOR_BUFFER_MS);
         self.monitor_delay_ms.insert(monitor_name.clone(), 0);
         self.monitor_eq
-            .insert(monitor_name.clone(), Arc::new(Mutex::new(Vec::new())));
+            .insert(monitor_name.clone(), Arc::new(ArcSwap::from_pointee(Vec::new())));
 
         if self.enabled {
             self.start_monitor(&monitor_name)?;
@@ -775,7 +918,7 @@ impl VirtualDevice {
                 q: b.q.clamp(0.1, 18.0),
             })
             .collect();
-        *slot.lock() = bands;
+        slot.store(Arc::new(bands));
         Ok(())
     }
 
@@ -908,7 +1051,7 @@ impl VirtualDevice {
         let eq_config = self
             .monitor_eq
             .entry(monitor_name.to_string())
-            .or_insert_with(|| Arc::new(Mutex::new(Vec::new())))
+            .or_insert_with(|| Arc::new(ArcSwap::from_pointee(Vec::new())))
             .clone();
 
         let (producer, mut fill) =
@@ -965,7 +1108,7 @@ impl VirtualDevice {
         let eq_config = self
             .monitor_eq
             .entry(monitor_name.to_string())
-            .or_insert_with(|| Arc::new(Mutex::new(Vec::new())))
+            .or_insert_with(|| Arc::new(ArcSwap::from_pointee(Vec::new())))
             .clone();
 
         let (producer, fill) = build_monitor_fill(
@@ -1053,7 +1196,7 @@ impl VirtualDevice {
     pub fn shutdown(&mut self, network: &NetworkManager) {
         let _ = self.set_enabled(false, network);
         self.sources.lock().clear();
-        self.connections.lock().clear();
+        self.connections.store(Arc::new(Vec::new()));
     }
 }
 
@@ -1075,7 +1218,7 @@ fn build_monitor_fill(
     stats: Arc<StatsCounters>,
     buffer_ms: u32,
     delay_ms: u32,
-    eq_config: Arc<Mutex<Vec<EqBand>>>,
+    eq_config: Arc<ArcSwap<Vec<EqBand>>>,
 ) -> (HeapProd<f32>, impl FnMut(&mut [f32], usize, u32) + Send + 'static) {
     // `delay_ms` is folded into both the target and max backlog so it reads
     // as a permanent floor under this monitor's buffered occupancy rather
@@ -1089,13 +1232,25 @@ fn build_monitor_fill(
 
     let ring = HeapRb::<f32>::new(INTERNAL_SAMPLE_RATE as usize * internal_channels.max(1));
     let (mut producer, mut consumer) = ring.split();
-    // Realizes `delay_ms` as steady-state latency immediately on start,
-    // rather than waiting for it to accumulate on its own: producer and
-    // consumer both run at real-time rates close to each other, so ring
-    // occupancy otherwise just sits wherever it started instead of
-    // drifting up to a new target.
-    if delay_frames > 0 {
-        producer.push_slice(&vec![0.0f32; delay_frames * internal_channels.max(1)]);
+    // Pre-fills the ring with the full `target_backlog_frames` (buffer_ms
+    // + delay_ms) of silence immediately on start, rather than leaving a
+    // fresh monitor to start from empty and hope enough backlog
+    // accumulates on its own. It doesn't, reliably: the mixer produces in
+    // coarse ~5ms ticks (MIX_TICK_PERIOD) while a real hardware output
+    // device's own callback period is often considerably finer than that,
+    // so most callbacks land *between* two mixer ticks with nothing new
+    // in the ring to read - without a standing cushion that's an underrun
+    // on nearly every callback, not an occasional one, and it never
+    // recovers because producer and consumer run at the same real-time
+    // rate on average (nothing biases occupancy back up once it's near
+    // zero - cap_backlog only ever trims excess from above). Verified
+    // against real hardware: a freshly-started monitor with only the old
+    // delay_ms-only prefill underran on ~90% of its callbacks even 500ms+
+    // into steady state, not just at startup. The extra prefilled frames
+    // are silence, not real audio, so this costs exactly `buffer_ms` of
+    // startup latency - the configured trade-off - rather than glitches.
+    if target_backlog_frames > 0 {
+        producer.push_slice(&vec![0.0f32; target_backlog_frames * internal_channels.max(1)]);
     }
     let mut pull_buf: Vec<f32> = Vec::new();
     let mut resampled_buf: Vec<f32> = Vec::new();
@@ -1126,8 +1281,27 @@ fn build_monitor_fill(
         }
 
         let output_frames_needed = output.len() / monitor_channels.max(1);
-        let want_internal_frames =
-            (output_frames_needed as f64 * internal_frames_per_output_frame).ceil() as usize + 16;
+        // The +16 lookahead margin only exists to give the resampler's
+        // forward-reaching interpolation (see resampler.rs's
+        // FORWARD_REACH) enough source material to produce every requested
+        // output frame. When no resampler is active - the common case, any
+        // monitor running at exactly INTERNAL_SAMPLE_RATE - `source_for_
+        // output` below is `pull_buf` verbatim and the output-writing loop
+        // stops the instant `output` is full, so those extra frames are
+        // pulled from the ring and then simply never read: a silent ~16-
+        // frame leak out of the ring on every single callback (at a 960-
+        // sample/480-frame callback this is a real, measured ~3% steady
+        // drain, not a rounding nicety) that empties the monitor's entire
+        // buffer_ms cushion within about a second and keeps it pinned at
+        // zero - i.e. this monitor underruns on nearly every callback
+        // forever, not just at startup. Confirmed against real hardware:
+        // a 48kHz monitor (no resampling needed) leaked ~32 samples/
+        // callback and never recovered until this fix.
+        let want_internal_frames = if resampler.is_some() {
+            (output_frames_needed as f64 * internal_frames_per_output_frame).ceil() as usize + 16
+        } else {
+            output_frames_needed
+        };
         pull_buf.resize(want_internal_frames * internal_channels, 0.0);
         let filled = consumer.pop_slice(&mut pull_buf);
         if filled < pull_buf.len() {
@@ -1169,8 +1343,13 @@ fn build_monitor_fill(
             *s = 0.0;
         }
 
-        let bands = eq_config.lock().clone();
-        eq.process(output, monitor_channels, output_sample_rate, &bands);
+        // Lock-free: `load()` is an atomic pointer read plus a refcount
+        // bump, not a mutex acquisition, and doesn't clone the Vec's
+        // contents - unlike a `Mutex<Vec<EqBand>>` this can't block this
+        // real-time thread on the UI thread's writer, and costs no heap
+        // allocation on the hot path even when bands are configured.
+        let bands = eq_config.load();
+        eq.process(output, monitor_channels, output_sample_rate, bands.as_slice());
 
         // EQ boost (up to +24dB/band) can push already near-unity samples
         // well past +/-1.0 with nothing downstream to catch it - this was
@@ -1193,7 +1372,7 @@ fn build_monitor_fill(
 fn mixer_loop(
     output_channels: usize,
     sources: Arc<Mutex<HashMap<String, SourceEntry>>>,
-    connections: Arc<Mutex<Vec<Connection>>>,
+    connections: Arc<ArcSwap<Vec<Connection>>>,
     monitor_producers: Arc<Mutex<HashMap<String, HeapProd<f32>>>>,
     output_levels: Arc<LevelStore>,
     stop_flag: &AtomicBool,
@@ -1221,6 +1400,14 @@ fn mixer_loop(
     let mut next_deadline = Instant::now() + MIX_TICK_PERIOD;
     let mut last_tick = Instant::now();
 
+    // Reused across every tick instead of allocated fresh: at steady state
+    // (once grown to the largest `frames` this run ever needs) this makes
+    // the tick body allocation-free. Cleared+resized rather than replaced
+    // each tick, which keeps the underlying capacity instead of giving it
+    // back to the allocator.
+    let mut mix: Vec<f32> = Vec::with_capacity(max_tick_frames * output_channels.max(1));
+    let mut output_peak_scratch: Vec<f32> = Vec::new();
+
     while !stop_flag.load(Ordering::Relaxed) {
         let now = Instant::now();
         if next_deadline > now {
@@ -1238,47 +1425,72 @@ fn mixer_loop(
         let frames = ((elapsed.as_secs_f64() * INTERNAL_SAMPLE_RATE as f64).round() as usize)
             .clamp(1, max_tick_frames);
 
-        let mut mix: Vec<f32> = vec![0.0; frames * output_channels];
+        mix.clear();
+        mix.resize(frames * output_channels, 0.0);
 
-        let conns = connections.lock().clone();
-        let mut chunks: HashMap<String, (usize, Vec<f32>)> = HashMap::new();
+        // Lock-free: an atomic pointer load + refcount bump, not a mutex
+        // acquisition, and doesn't clone the routing table's contents -
+        // see the `connections` field doc on VirtualDevice.
+        let conns = connections.load_full();
+
         {
             let mut sources_guard = sources.lock();
-            for (id, entry) in sources_guard.iter_mut() {
+            for entry in sources_guard.values_mut() {
                 if cap_backlog(&mut entry.consumer, entry.channels, max_backlog_frames, target_backlog_frames) {
                     entry.stats.record_overrun();
                 }
 
-                let mut buf = vec![0.0f32; frames * entry.channels.max(1)];
-                let filled = entry.consumer.pop_slice(&mut buf);
-                if filled < buf.len() {
+                let want = frames * entry.channels.max(1);
+                entry.scratch.clear();
+                entry.scratch.resize(want, 0.0);
+                let filled = entry.consumer.pop_slice(&mut entry.scratch);
+                if filled < entry.scratch.len() {
                     entry.stats.record_underrun();
                 }
                 entry
                     .stats
                     .set_buffered_frames(entry.consumer.occupied_len() / entry.channels.max(1));
-                entry.levels.update(&buf, entry.channels);
+                entry
+                    .levels
+                    .update(&entry.scratch, entry.channels, &mut entry.peak_scratch);
+
+                // Pre-fader, pre-mute tap: a source being recorded still
+                // gets captured while muted, and a gain move mid-take
+                // doesn't touch the file on disk. push_slice is
+                // non-blocking and silently drops on a full ring buffer
+                // (RECORD_RING_SECONDS worth of headroom), so a slow disk
+                // flush can only cost the recording a few dropped samples,
+                // never stall this tick.
+                if let Some(tap) = entry.record_tap.as_mut() {
+                    let _ = tap.push_slice(&entry.scratch);
+                }
 
                 if entry.muted {
                     continue;
                 }
                 if entry.gain != 1.0 {
-                    for s in buf.iter_mut() {
+                    for s in entry.scratch.iter_mut() {
                         *s *= entry.gain;
                     }
                 }
-                chunks.insert(id.clone(), (entry.channels, buf));
             }
-        }
 
-        for conn in &conns {
-            if conn.output_channel >= output_channels {
-                continue;
-            }
-            if let Some((channels, chunk)) = chunks.get(&conn.source_id) {
-                if conn.source_channel >= *channels {
+            // Routes straight from each source's own persistent `scratch`
+            // buffer (just populated above) instead of collecting every
+            // source into a freshly-allocated HashMap<String, Vec<f32>>
+            // first - same result, no per-tick map/Vec allocation.
+            for conn in conns.iter() {
+                if conn.output_channel >= output_channels {
                     continue;
                 }
+                let Some(entry) = sources_guard.get(&conn.source_id) else {
+                    continue;
+                };
+                if entry.muted || conn.source_channel >= entry.channels {
+                    continue;
+                }
+                let channels = entry.channels;
+                let chunk = &entry.scratch;
                 for frame in 0..frames {
                     let src_idx = frame * channels + conn.source_channel;
                     let dst_idx = frame * output_channels + conn.output_channel;
@@ -1292,7 +1504,7 @@ fn mixer_loop(
         for sample in mix.iter_mut() {
             *sample = soft_limit(*sample);
         }
-        output_levels.update(&mix, output_channels);
+        output_levels.update(&mix, output_channels, &mut output_peak_scratch);
 
         let mut producers = monitor_producers.lock();
         for producer in producers.values_mut() {
@@ -1635,5 +1847,191 @@ mod tests {
             elapsed_per_tick,
             tick_period_us
         );
+    }
+
+    /// End-to-end smoke test against real hardware: opens a real WASAPI
+    /// loopback capture of the default output device as a source, opens
+    /// that same default output device again as a monitor, wires them
+    /// together, and runs the real mixer thread for a few seconds - the
+    /// exact `Router`/`VirtualDevice`/`mixer_loop`/`build_monitor_fill`
+    /// code path a live user session exercises, just driven directly
+    /// instead of through the Tauri UI. Requires actual audio hardware and
+    /// briefly plays audio, so it's excluded from the default `cargo test`
+    /// run - invoke explicitly with `cargo test -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "opens real WASAPI devices and briefly plays audio; run explicitly"]
+    fn live_pipeline_flows_audio_without_growing_backlog() {
+        use super::super::device_manager::{guess_internal_output, DeviceManager};
+        use super::super::network::NetworkManager;
+        use super::{Connection, VirtualDevice, SYSTEM_AUDIO_SOURCE_NAME};
+        use std::thread;
+        use std::time::Duration;
+
+        let outputs = DeviceManager::new().list_output_devices();
+        println!("output devices on this machine:");
+        for d in &outputs {
+            println!(
+                "  {}{} - {:?}Hz {:?}ch",
+                d.name,
+                if d.is_default { " (default)" } else { "" },
+                d.sample_rate,
+                d.channels
+            );
+        }
+
+        // Deliberately targets the real built-in speaker rather than
+        // whatever Windows currently has set as the *default* device - on
+        // a machine with something like Voicemeeter installed, the default
+        // is often a virtual cable, not real hardware, which is a
+        // misleading target for a "does audio actually come out of the
+        // speaker" check.
+        let default_output = guess_internal_output(&outputs)
+            .expect("no output device available on this machine - can't run a live check")
+            .name;
+        println!("live check: routing system loopback -> '{default_output}'");
+
+        let network = NetworkManager::new();
+        let mut device = VirtualDevice::new("live-check".to_string(), "Live Check".to_string());
+
+        device
+            .add_source(SYSTEM_AUDIO_SOURCE_NAME.to_string())
+            .expect("loopback capture failed to start");
+        device
+            .add_monitor(default_output.clone())
+            .expect("failed to open monitor output");
+
+        for ch in 0..2 {
+            device.set_connection(Connection {
+                source_id: SYSTEM_AUDIO_SOURCE_NAME.to_string(),
+                source_channel: ch,
+                output_channel: ch,
+                gain: 1.0,
+            });
+            device
+                .set_monitor_channel(&default_output, ch, ch)
+                .expect("failed to wire monitor channel");
+        }
+
+        device.set_enabled(true, &network).expect("failed to enable device");
+
+        // Let the pipeline ramp up (ring buffers filling from empty always
+        // costs a few underruns) before taking the "before" snapshot, then
+        // run long enough that a real regression - unbounded backlog
+        // growth, or underruns/overruns climbing steadily instead of
+        // flatlining - would show up in the delta.
+        thread::sleep(Duration::from_millis(500));
+        let before = device.levels();
+
+        thread::sleep(Duration::from_secs(3));
+        let after = device.levels();
+
+        device.shutdown(&network);
+
+        for (name, stats) in &after.source_stats {
+            println!("source '{name}': {stats:?}");
+        }
+        for (name, stats) in &after.monitor_stats {
+            println!("monitor '{name}': {stats:?}");
+        }
+
+        for (name, stats_after) in &after.monitor_stats {
+            let stats_before = before.monitor_stats.get(name);
+            let (underrun_delta, overrun_delta) = match stats_before {
+                Some(b) => (
+                    stats_after.underruns.saturating_sub(b.underruns),
+                    stats_after.overruns.saturating_sub(b.overruns),
+                ),
+                None => (stats_after.underruns, stats_after.overruns),
+            };
+            println!(
+                "monitor '{name}' over 3s: +{underrun_delta} underruns, +{overrun_delta} overruns, {}ms buffered",
+                stats_after.buffered_ms
+            );
+            assert!(
+                underrun_delta < 50,
+                "monitor '{name}' underran {underrun_delta} times in 3s of steady state - possible regression"
+            );
+            assert!(
+                stats_after.buffered_ms < 500.0,
+                "monitor '{name}' backlog grew to {}ms - cap_backlog isn't holding it bounded",
+                stats_after.buffered_ms
+            );
+        }
+    }
+
+    /// End-to-end smoke test for the recording tap added in
+    /// `mixer_loop`/`SourceEntry::record_tap`: opens a real WASAPI
+    /// loopback source, records ~1.5s of it, stops, and confirms
+    /// `manifest.json` plus a playable WAV file land on disk with a
+    /// duration matching wall-clock time - the exact check the recording
+    /// feature's implementation plan calls for before building any UI on
+    /// top of it. Requires actual audio hardware, so excluded from the
+    /// default `cargo test` run - invoke explicitly with
+    /// `cargo test -- --ignored --nocapture recording_writes_a_wav_file_per_source`.
+    #[test]
+    #[ignore = "opens a real WASAPI device and briefly records audio; run explicitly"]
+    fn recording_writes_a_wav_file_per_source() {
+        use super::super::network::NetworkManager;
+        use super::{VirtualDevice, INTERNAL_SAMPLE_RATE, SYSTEM_AUDIO_SOURCE_NAME};
+        use std::thread;
+        use std::time::Duration;
+
+        let base_dir = std::env::temp_dir().join(format!("yomagaudio_recording_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base_dir);
+
+        let network = NetworkManager::new();
+        let mut device = VirtualDevice::new("record-check".to_string(), "Record Check".to_string());
+
+        device
+            .add_source(SYSTEM_AUDIO_SOURCE_NAME.to_string())
+            .expect("loopback capture failed to start");
+        device.set_enabled(true, &network).expect("failed to enable device");
+
+        // Let the ring buffer start filling before recording begins.
+        thread::sleep(Duration::from_millis(300));
+
+        let session_id = device
+            .start_recording(base_dir.clone(), Some("Test Recording".to_string()))
+            .expect("start_recording failed");
+        println!("recording session: {session_id}");
+
+        thread::sleep(Duration::from_millis(1500));
+
+        let summary = device.stop_recording().expect("stop_recording failed");
+        device.shutdown(&network);
+
+        println!("summary: {summary:?}");
+        assert_eq!(summary.track_count, 1, "expected exactly one track (the loopback source)");
+        assert!(
+            summary.duration_ms >= 1000 && summary.duration_ms <= 2500,
+            "recorded duration {}ms is outside the expected ~1.5s window",
+            summary.duration_ms
+        );
+
+        let session_dir = base_dir.join(&session_id);
+        let manifest_path = session_dir.join("manifest.json");
+        assert!(manifest_path.exists(), "manifest.json was not written");
+        let manifest_json = std::fs::read_to_string(&manifest_path).expect("failed to read manifest.json");
+        let manifest: super::super::recording::RecordingManifest =
+            serde_json::from_str(&manifest_json).expect("manifest.json did not parse");
+        assert_eq!(manifest.tracks.len(), 1);
+
+        let track = &manifest.tracks[0];
+        let wav_path = session_dir.join(&track.file);
+        assert!(wav_path.exists(), "track WAV file was not written: {wav_path:?}");
+
+        let reader = hound::WavReader::open(&wav_path).expect("failed to open recorded WAV file");
+        let spec = reader.spec();
+        assert_eq!(spec.sample_rate, INTERNAL_SAMPLE_RATE);
+        assert_eq!(spec.sample_format, hound::SampleFormat::Float);
+        assert_eq!(spec.channels as usize, track.channels);
+        let sample_count = reader.len() as u64;
+        let expected_samples = track.duration_frames * track.channels as u64;
+        assert_eq!(
+            sample_count, expected_samples,
+            "WAV file's actual sample count doesn't match the manifest's reported duration"
+        );
+
+        let _ = std::fs::remove_dir_all(&base_dir);
     }
 }

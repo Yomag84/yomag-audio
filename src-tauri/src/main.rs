@@ -16,6 +16,20 @@ use tauri::{Emitter, Manager, WindowEvent};
 fn main() {
     tracing_subscriber::fmt::init();
 
+    // Without this, Windows has no app identity to group this process's
+    // windows/taskbar entry/Task Manager row under, and a WebView2-hosted
+    // app with no explicit AUMID gets bucketed under the generic
+    // "WebView2 Manager" entry alongside every other unrelated WebView2
+    // app on the system instead of showing up as its own "YomagAudio"
+    // entry. Must be set before any window is created (see MSDN), so this
+    // runs before Tauri's Builder ever touches a window. Matches the app
+    // identifier in tauri.conf.json rather than inventing a separate name.
+    if let Err(err) =
+        unsafe { windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID(windows::core::w!("com.yomag.audio")) }
+    {
+        tracing::warn!(%err, "failed to set AppUserModelID - Task Manager/taskbar may group this under a generic WebView2 entry");
+    }
+
     // Windows' default timer resolution is ~15.6ms, but the mixer thread,
     // loopback capture, and network publish threads all sleep for 5-10ms
     // between ticks. Without this, those sleeps silently round up to the
@@ -231,6 +245,16 @@ fn main() {
             commands::audio::list_peers,
             commands::audio::set_device_published,
             commands::audio::add_network_source,
+            commands::recording::start_recording,
+            commands::recording::stop_recording,
+            commands::recording::list_recordings,
+            commands::recording::rename_recording,
+            commands::recording::delete_recording,
+            commands::recording::get_recording_manifest,
+            commands::recording::recording_file_path,
+            commands::recording::load_recording_project,
+            commands::recording::save_recording_project,
+            commands::recording::render_mixdown,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

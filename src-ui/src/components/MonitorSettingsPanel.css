@@ -25,16 +25,16 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  background: #1a1a1a;
+  background: var(--bg-surface-alt);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 3px 6px;
 }
 
 .monitor-setting-input input[type="number"] {
   background: transparent;
   border: none;
-  color: var(--text-light);
+  color: var(--text-primary);
   font-size: 12px;
   width: 100%;
   min-width: 0;
@@ -71,10 +71,10 @@
 }
 
 .eq-band-row input[type="number"] {
-  background: #1a1a1a;
+  background: var(--bg-surface-alt);
   border: 1px solid var(--border);
-  border-radius: 4px;
-  color: var(--text-light);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
   font-size: 11px;
   padding: 2px 4px;
   min-width: 0;
@@ -90,7 +90,7 @@
 
 .eq-band-gain {
   flex: 1;
-  accent-color: var(--primary);
+  accent-color: var(--accent);
 }
 
 .eq-band-unit {

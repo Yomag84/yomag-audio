@@ -6,6 +6,9 @@ import { RoutingPanel } from "./components/RoutingPanel"
 import { NetworkPanel } from "./components/NetworkPanel"
 import { ApplicationsPanel } from "./components/ApplicationsPanel"
 import { SettingsDialog } from "./components/SettingsDialog"
+import { RecordingsPanel } from "./components/RecordingsPanel"
+import { RecordingDetailModal } from "./components/RecordingDetailModal"
+import { EditorPage } from "./components/editor/EditorPage"
 import { useDeviceLevels } from "./hooks/useDeviceLevels"
 import type {
   AppAudioSession,
@@ -14,14 +17,25 @@ import type {
   EqBand,
   InternalDeviceGuess,
   PeerSnapshot,
+  RecordingSummary,
   VirtualDeviceSnapshot,
 } from "./types"
 import "./App.css"
 
-type View = "routing" | "applications" | "network"
+type View = "routing" | "applications" | "network" | "recordings" | "editor"
+type Theme = "light" | "dark"
+
+const THEME_STORAGE_KEY = "yomag-theme"
+
+function getInitialTheme(): Theme {
+  const stored = window.localStorage.getItem(THEME_STORAGE_KEY)
+  if (stored === "light" || stored === "dark") return stored
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"
+}
 
 function App() {
   const [view, setView] = useState<View>("routing")
+  const [theme, setTheme] = useState<Theme>(getInitialTheme)
   const [physicalDevices, setPhysicalDevices] = useState<AudioDeviceInfo[]>([])
   const [virtualDevices, setVirtualDevices] = useState<VirtualDeviceSnapshot[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -35,9 +49,21 @@ function App() {
   const [systemEndpoints, setSystemEndpoints] = useState<string[]>([])
   const [peers, setPeers] = useState<PeerSnapshot[]>([])
   const [appSessions, setAppSessions] = useState<AppAudioSession[]>([])
+  const [recordings, setRecordings] = useState<RecordingSummary[]>([])
+  const [recordingsLoading, setRecordingsLoading] = useState(false)
+  const [detailSession, setDetailSession] = useState<RecordingSummary | null>(null)
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null)
+  const [activeRecordingDeviceId, setActiveRecordingDeviceId] = useState<string | null>(null)
+  const [recordingStartedAt, setRecordingStartedAt] = useState<number | null>(null)
+  const [recordingElapsedLabel, setRecordingElapsedLabel] = useState("0:00")
   const selectedIdRef = useRef<string | null>(null)
 
   const levels = useDeviceLevels()
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme)
+    window.localStorage.setItem(THEME_STORAGE_KEY, theme)
+  }, [theme])
 
   const refreshPhysicalDevices = useCallback(async () => {
     try {
@@ -165,6 +191,90 @@ function App() {
     const interval = setInterval(refreshAppSessions, 4000)
     return () => clearInterval(interval)
   }, [view, refreshAppSessions])
+
+  const refreshRecordings = useCallback(async () => {
+    setRecordingsLoading(true)
+    try {
+      setRecordings(await invoke<RecordingSummary[]>("list_recordings"))
+    } catch (err) {
+      setError(String(err))
+    } finally {
+      setRecordingsLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (view !== "recordings") return
+    refreshRecordings()
+  }, [view, refreshRecordings])
+
+  useEffect(() => {
+    if (recordingStartedAt === null) return
+    const update = () => {
+      const totalSeconds = Math.max(0, Math.floor((Date.now() - recordingStartedAt) / 1000))
+      const minutes = Math.floor(totalSeconds / 60)
+      const seconds = totalSeconds % 60
+      setRecordingElapsedLabel(`${minutes}:${seconds.toString().padStart(2, "0")}`)
+    }
+    update()
+    const interval = setInterval(update, 1000)
+    return () => clearInterval(interval)
+  }, [recordingStartedAt])
+
+  const handleStartRecording = async () => {
+    if (!selectedDevice) return
+    setError(null)
+    try {
+      await invoke<string>("start_recording", { deviceId: selectedDevice.id, name: null })
+      setActiveRecordingDeviceId(selectedDevice.id)
+      setRecordingStartedAt(Date.now())
+    } catch (err) {
+      setError(String(err))
+    }
+  }
+
+  const handleStopRecording = async () => {
+    if (!activeRecordingDeviceId) return
+    setError(null)
+    try {
+      const summary = await invoke<RecordingSummary>("stop_recording", { deviceId: activeRecordingDeviceId })
+      setActiveRecordingDeviceId(null)
+      setRecordingStartedAt(null)
+      setView("recordings")
+      await refreshRecordings()
+      setDetailSession(summary)
+    } catch (err) {
+      setError(String(err))
+    }
+  }
+
+  const handleRenameRecording = async (sessionId: string, name: string) => {
+    setError(null)
+    try {
+      await invoke("rename_recording", { sessionId, newName: name })
+      await refreshRecordings()
+      setDetailSession((current) => (current?.session_id === sessionId ? { ...current, name } : current))
+    } catch (err) {
+      setError(String(err))
+    }
+  }
+
+  const handleDeleteRecording = async (sessionId: string) => {
+    setError(null)
+    try {
+      await invoke("delete_recording", { sessionId })
+      await refreshRecordings()
+      setDetailSession((current) => (current?.session_id === sessionId ? null : current))
+    } catch (err) {
+      setError(String(err))
+    }
+  }
+
+  const handleOpenEditor = (sessionId: string) => {
+    setDetailSession(null)
+    setEditingSessionId(sessionId)
+    setView("editor")
+  }
 
   useEffect(() => {
     selectedIdRef.current = selectedId
@@ -363,8 +473,59 @@ function App() {
   return (
     <div className="app">
       <header className="header">
-        <h1>YomagAudio</h1>
-        <p>A transit system for your audio</p>
+        <div className="header-brand">
+          <span className="header-logo" aria-hidden="true">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+              <rect x="1" y="8" width="3" height="4" rx="1.5" fill="currentColor" />
+              <rect x="6" y="4" width="3" height="12" rx="1.5" fill="currentColor" />
+              <rect x="11" y="0.5" width="3" height="19" rx="1.5" fill="currentColor" />
+              <rect x="16" y="5.5" width="3" height="9" rx="1.5" fill="currentColor" />
+            </svg>
+          </span>
+          <div className="header-titles">
+            <h1>YomagAudio</h1>
+            <p>A transit system for your audio</p>
+          </div>
+        </div>
+        <div className="theme-toggle" role="radiogroup" aria-label="Theme">
+          <button
+            type="button"
+            role="radio"
+            aria-checked={theme === "light"}
+            className={`theme-toggle-option ${theme === "light" ? "active" : ""}`}
+            title="Light theme"
+            onClick={() => setTheme("light")}
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="12" r="4.5" fill="currentColor" />
+              <g stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+                <line x1="12" y1="1.5" x2="12" y2="4.5" />
+                <line x1="12" y1="19.5" x2="12" y2="22.5" />
+                <line x1="1.5" y1="12" x2="4.5" y2="12" />
+                <line x1="19.5" y1="12" x2="22.5" y2="12" />
+                <line x1="4.4" y1="4.4" x2="6.5" y2="6.5" />
+                <line x1="17.5" y1="17.5" x2="19.6" y2="19.6" />
+                <line x1="4.4" y1="19.6" x2="6.5" y2="17.5" />
+                <line x1="17.5" y1="6.5" x2="19.6" y2="4.4" />
+              </g>
+            </svg>
+          </button>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={theme === "dark"}
+            className={`theme-toggle-option ${theme === "dark" ? "active" : ""}`}
+            title="Dark theme"
+            onClick={() => setTheme("dark")}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+              <path
+                d="M20.5 14.5A9 9 0 1 1 9.5 3.5a7 7 0 0 0 11 11Z"
+                fill="currentColor"
+              />
+            </svg>
+          </button>
+        </div>
       </header>
 
       {error && <div className="error-banner">{error}</div>}
@@ -379,6 +540,9 @@ function App() {
           </button>
           <button className={view === "network" ? "active" : ""} onClick={() => setView("network")}>
             Network
+          </button>
+          <button className={view === "recordings" ? "active" : ""} onClick={() => setView("recordings")}>
+            Recordings
           </button>
         </div>
         <button className="settings-tab-button" onClick={() => setShowSettings(true)} title="System Settings">
@@ -400,6 +564,30 @@ function App() {
             />
           </main>
         </div>
+      )}
+
+      {view === "recordings" && (
+        <div className="workspace">
+          <main className="main">
+            <RecordingsPanel
+              recordings={recordings}
+              loading={recordingsLoading}
+              onRefresh={refreshRecordings}
+              onOpen={setDetailSession}
+              onDelete={handleDeleteRecording}
+            />
+          </main>
+        </div>
+      )}
+
+      {view === "editor" && editingSessionId && (
+        <EditorPage
+          sessionId={editingSessionId}
+          onExit={() => {
+            setEditingSessionId(null)
+            setView("recordings")
+          }}
+        />
       )}
 
       {view === "network" && (
@@ -455,6 +643,26 @@ function App() {
                   <button className="btn btn-secondary" onClick={handleLoadProfile} disabled={busy || !hasSavedProfile}>
                     Load Profile
                   </button>
+                  {activeRecordingDeviceId === selectedDevice.id ? (
+                    <button className="btn btn-record recording" onClick={handleStopRecording}>
+                      <span className="record-dot" aria-hidden="true" />
+                      Stop ({recordingElapsedLabel})
+                    </button>
+                  ) : (
+                    <button
+                      className="btn btn-record"
+                      onClick={handleStartRecording}
+                      disabled={activeRecordingDeviceId !== null || selectedDevice.sources.length === 0}
+                      title={
+                        selectedDevice.sources.length === 0
+                          ? "Add a source to this device before recording"
+                          : "Record every current source of this device to its own track"
+                      }
+                    >
+                      <span className="record-dot" aria-hidden="true" />
+                      Record
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -529,6 +737,17 @@ function App() {
           onSetMonitorBufferMs={handleSetMonitorBufferMs}
           onSetMonitorDelayMs={handleSetMonitorDelayMs}
           onSetMonitorExclusive={handleSetMonitorExclusive}
+        />
+      )}
+
+      {detailSession && (
+        <RecordingDetailModal
+          key={detailSession.session_id}
+          session={detailSession}
+          onClose={() => setDetailSession(null)}
+          onRename={handleRenameRecording}
+          onDelete={handleDeleteRecording}
+          onOpenEditor={handleOpenEditor}
         />
       )}
 
