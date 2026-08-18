@@ -1,0 +1,108 @@
+.monitor-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.monitor-settings-row {
+  display: flex;
+  gap: 10px;
+}
+
+.monitor-setting-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--text-muted);
+  flex: 1;
+}
+
+.monitor-setting-input {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: #1a1a1a;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 6px;
+}
+
+.monitor-setting-input input[type="number"] {
+  background: transparent;
+  border: none;
+  color: var(--text-light);
+  font-size: 12px;
+  width: 100%;
+  min-width: 0;
+}
+
+.monitor-setting-input input[type="number"]:focus {
+  outline: none;
+}
+
+.monitor-setting-unit {
+  font-size: 10px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.monitor-eq {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.monitor-eq-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.eq-band-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.eq-band-row input[type="number"] {
+  background: #1a1a1a;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-light);
+  font-size: 11px;
+  padding: 2px 4px;
+  min-width: 0;
+}
+
+.eq-band-freq {
+  width: 56px;
+}
+
+.eq-band-q {
+  width: 40px;
+}
+
+.eq-band-gain {
+  flex: 1;
+  accent-color: var(--primary);
+}
+
+.eq-band-unit {
+  font-size: 10px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.eq-band-gain-label {
+  min-width: 44px;
+  font-size: 10px;
+  color: var(--text-muted);
+  text-align: right;
+  flex-shrink: 0;
+}

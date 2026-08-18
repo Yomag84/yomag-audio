@@ -1,0 +1,62 @@
+[package]
+name = "yomag-audio"
+version = "0.1.0"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2.0", features = [] }
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+tauri = { version = "2.0", features = ["tray-icon"] }
+tauri-plugin-shell = "2.0"
+tokio = { version = "1.35", features = ["full"] }
+parking_lot = "0.12"
+ringbuf = "0.4"
+cpal = "0.15"
+windows = { version = "0.58", features = [
+    "implement",
+    "Win32_Media",
+    "Win32_Media_Audio",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Threading",
+    "Win32_Foundation",
+    "Win32_Devices_Enumeration_Pnp",
+    "Win32_Devices_Properties",
+    "Win32_Devices_FunctionDiscovery",
+    "Win32_UI_Shell_PropertiesSystem",
+    "Win32_Security",
+] }
+windows-core = "0.58"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+log = "0.4"
+
+[dev-dependencies]
+
+# The mixer thread does real-time work (routing, resampling, EQ) on a 5ms
+# deadline every tick - a fully unoptimized (opt-level 0) debug build
+# routinely can't keep up with that, which is audible as crackling/
+# stuttering distinct from any actual logic bug. opt-level 1 on our own
+# code plus full optimization on dependencies (cpal, ringbuf, etc. - the
+# usual "make deps fast, keep my own compile times close to debug" combo)
+# keeps iteration reasonably fast while giving the audio path enough
+# headroom to hit its deadline.
+[profile.dev]
+opt-level = 1
+# This toolchain/MSVC-linker combination has a reproducible incremental-
+# compilation bug: with incremental on, `cargo build`/`tauri dev` fails
+# deterministically with LNK2019 "unresolved external symbol anon.*.llvm.*"
+# in unrelated code (main, tokio::task::spawn, tauri's protocol handler) -
+# confirmed by building with CARGO_INCREMENTAL=0, which succeeds every
+# time, and reproducing the identical failure the moment incremental is
+# re-enabled even from a completely fresh target dir (so it's not stale-
+# cache corruption, it's the incremental codegen-unit split itself
+# colliding with the linker's /OPT:ICF identical-code folding). Slower
+# rebuilds are a much better trade than a coin-flip build.
+incremental = false
+
+[profile.dev.package."*"]
+opt-level = 3
