@@ -1,0 +1,1 @@
+C:\Users\Abayomi\Documents\Project\YomagAudio\yomag-audio\driver\YomagAudioDriver\x64\Release\YomagAudioDriver.sys

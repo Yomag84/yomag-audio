@@ -3,3 +3,4 @@
 /src-tauri/ui
 /dist
 *.log
+/community/discord_token.txt

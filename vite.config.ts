@@ -34,5 +34,14 @@ export default defineConfig(async () => ({
     outDir: "../src-tauri/ui",
     minify: !process.env.TAURI_DEBUG ? "esbuild" : false,
     sourcemap: !!process.env.TAURI_DEBUG,
+    rollupOptions: {
+      // splashscreen.html is a second, genuinely static entry (no React)
+      // so the splash window in main.rs's setup() can paint instantly
+      // instead of waiting on the main app's JS bundle.
+      input: {
+        main: "src-ui/index.html",
+        splashscreen: "src-ui/splashscreen.html",
+      },
+    },
   },
 }))

@@ -200,6 +200,26 @@ fn main() {
                 let _ = app_handle.emit("audio://levels", levels);
             });
 
+            // The main window starts hidden (see tauri.conf.json) so it
+            // never flashes an unstyled/blank frame while the webview
+            // loads; the splashscreen window - a genuinely separate
+            // static HTML page, not the React bundle - paints instantly
+            // in the meantime. A fixed delay rather than a frontend-ready
+            // signal: this app has no network calls or slow work on
+            // startup (device enumeration is local and fast), so there's
+            // nothing worth the extra IPC round-trip to actually wait on.
+            let splash_app_handle = app.handle().clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(1200));
+                if let Some(splash) = splash_app_handle.get_webview_window("splashscreen") {
+                    let _ = splash.close();
+                }
+                if let Some(main) = splash_app_handle.get_webview_window("main") {
+                    let _ = main.show();
+                    let _ = main.set_focus();
+                }
+            });
+
             Ok(())
         })
         .on_window_event(|window, event| {

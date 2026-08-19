@@ -1,0 +1,85 @@
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = MEDIA
+ClassGuid   = {4d36e96c-e325-11ce-bfc1-08002be10318}
+Provider    = %ProviderString%
+CatalogFile = YomagAudioDriver.cat
+DriverVer = 08/19/2026,1.58.23.407
+PnpLockDown = 1
+
+[Manufacturer]
+%ManufacturerString% = YomagAudio, NTamd64
+
+[YomagAudio.NTamd64]
+%DeviceDesc% = YomagAudioDriver_Install, Root\YomagAudioCable
+
+[SourceDisksNames]
+1 = %DiskId1%
+
+[SourceDisksFiles]
+YomagAudioDriver.sys = 1
+
+[DestinationDirs]
+DefaultDestDir = 12
+
+[YomagAudioDriver_Install]
+CopyFiles  = YomagAudioDriver.CopyFiles
+Interfaces = YomagAudioDriver_Install.Interfaces
+
+[YomagAudioDriver.CopyFiles]
+YomagAudioDriver.sys
+
+[YomagAudioDriver_Install.Services]
+AddService = YomagAudioDriver,0x00000002,YomagAudioDriver_Service_Inst
+
+[YomagAudioDriver_Service_Inst]
+DisplayName    = %ServiceDesc%
+ServiceType    = 1
+StartType      = 3
+ErrorControl   = 1
+ServiceBinary  = %12%\YomagAudioDriver.sys
+
+; Without these, PcRegisterSubdevice's "Topology"/"Wave" subdevices (see
+; driver.cpp's StartDevice - the reference strings below must match those
+; exact names) never get exposed as OS-visible device interfaces: portcls
+; loads and runs the driver fine either way, but sysaudio only discovers
+; audio filters through these KSCATEGORY_* device interfaces, so without
+; this section the adapter devnode comes up healthy while contributing zero
+; endpoints to WASAPI/mmdevapi - see
+; https://learn.microsoft.com/windows-hardware/drivers/audio/installing-device-interfaces-for-an-audio-adapter
+[YomagAudioDriver_Install.Interfaces]
+AddInterface = %KSCATEGORY_AUDIO%,%KSName_Wave%,YomagAudioDriver_Install.Wave
+AddInterface = %KSCATEGORY_RENDER%,%KSName_Wave%,YomagAudioDriver_Install.Wave
+AddInterface = %KSCATEGORY_CAPTURE%,%KSName_Wave%,YomagAudioDriver_Install.Wave
+AddInterface = %KSCATEGORY_TOPOLOGY%,%KSName_Topology%,YomagAudioDriver_Install.Topology
+
+[YomagAudioDriver_Install.Wave]
+AddReg = YomagAudioDriver_Install.Wave.AddReg
+
+[YomagAudioDriver_Install.Wave.AddReg]
+HKR,,FriendlyName,,%WaveDeviceName%
+HKR,,CLSID,,%Proxy.CLSID%
+
+[YomagAudioDriver_Install.Topology]
+AddReg = YomagAudioDriver_Install.Topology.AddReg
+
+[YomagAudioDriver_Install.Topology.AddReg]
+HKR,,FriendlyName,,%TopologyDeviceName%
+HKR,,CLSID,,%Proxy.CLSID%
+
+[Strings]
+ProviderString      = "YomagAudio"
+ManufacturerString  = "YomagAudio"
+DiskId1             = "YomagAudio Virtual Cable Installation Disk"
+DeviceDesc          = "YomagAudio Virtual Cable"
+ServiceDesc         = "YomagAudio Virtual Cable Driver"
+WaveDeviceName       = "YomagAudio Virtual Cable Wave"
+TopologyDeviceName   = "YomagAudio Virtual Cable Topology"
+KSName_Wave          = "Wave"
+KSName_Topology      = "Topology"
+KSCATEGORY_AUDIO     = "{6994AD04-93EF-11D0-A3CC-00A0C9223196}"
+KSCATEGORY_RENDER    = "{65E8773E-8F56-11D0-A3B9-00A0C9223196}"
+KSCATEGORY_CAPTURE   = "{65E8773D-8F56-11D0-A3B9-00A0C9223196}"
+KSCATEGORY_TOPOLOGY  = "{DDA54A40-1E4C-11D1-A050-405705C10000}"
+Proxy.CLSID          = "{17CCA71B-ECD7-11D0-B908-00A0C9223196}"
+

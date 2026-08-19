@@ -187,7 +187,9 @@ yomag-audio/
 │  ├─ tauri.conf.json            Window, bundler, dev-server config
 │  └─ capabilities/default.json  Tauri permission manifest
 ├─ driver/YomagAudioDriver/     Kernel-mode virtual audio cable (C++, WDM/PortCls)
+├─ community/                   Discord server setup script (see community/README.md)
 ├─ .github/workflows/build.yml  CI: test + build + upload installer
+├─ .github/FUNDING.yml          Powers the repo's native "Sponsor" button
 ├─ package.json / vite.config.ts / tsconfig*.json
 ```
 
@@ -531,7 +533,7 @@ opt into, not wake up to.
 [![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-db61a2?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/Yomag84)
 [![Discord](https://img.shields.io/discord/1539426555451809812?logo=discord&logoColor=white&label=Discord)](https://discord.gg/fKWNtBHYHt)
 
-- **Discord** — [join the server](https://discord.gg/fKWNtBHYHt) for help, feature discussion, and sharing routing/recording setups.
+- **Discord** — [join the server](https://discord.gg/fKWNtBHYHt) for help, feature discussion, and sharing routing/recording setups. Its structure was built via the Discord API — see `community/README.md` if you need to rebuild or extend it.
 - **Sponsor** — if YomagAudio is useful to you, you can support its development via [GitHub Sponsors](https://github.com/sponsors/Yomag84).
 - **Issues** — bug reports and feature requests belong on the [issue tracker](https://github.com/Yomag84/yomag-audio/issues).
 

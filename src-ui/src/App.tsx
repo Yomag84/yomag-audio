@@ -475,12 +475,7 @@ function App() {
       <header className="header">
         <div className="header-brand">
           <span className="header-logo" aria-hidden="true">
-            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-              <rect x="1" y="8" width="3" height="4" rx="1.5" fill="currentColor" />
-              <rect x="6" y="4" width="3" height="12" rx="1.5" fill="currentColor" />
-              <rect x="11" y="0.5" width="3" height="19" rx="1.5" fill="currentColor" />
-              <rect x="16" y="5.5" width="3" height="9" rx="1.5" fill="currentColor" />
-            </svg>
+            <img src="/app-icon.png" alt="" width="24" height="24" />
           </span>
           <div className="header-titles">
             <h1>YomagAudio</h1>
