@@ -19,6 +19,11 @@ captured to its own track — and edited afterward in a built-in multitrack
 editor (trim, split, move, per-track gain/mute/solo/EQ) before exporting a
 final mixdown.
 
+**[⬇ Download YomagAudio v0.1.0 for Windows x64](https://github.com/Yomag84/yomag-audio/releases/download/v0.1.0/YomagAudio_0.1.0_x64-setup.exe)**
+— installer, no separate driver download needed (see
+[Getting started](#getting-started) for what the driver bundling does and
+doesn't do). All [releases](https://github.com/Yomag84/yomag-audio/releases).
+
 ---
 
 ## Contents
@@ -195,6 +200,15 @@ yomag-audio/
 
 ## Getting started
 
+### Download (prebuilt installer)
+
+**[Download YomagAudio v0.1.0](https://github.com/Yomag84/yomag-audio/releases/download/v0.1.0/YomagAudio_0.1.0_x64-setup.exe)**
+— a single NSIS installer, no separate driver download. It also carries the
+optional kernel driver's files (see [The kernel driver](#the-kernel-driver-optional-advanced)
+below) but does **not** install, sign, or load them — you'll see a one-time
+warning dialog during setup explaining that, and every feature except
+*Local Network Devices* works with nothing further needed.
+
 ### Prerequisites
 
 - **Windows 10/11**, x86-64 (the engine and driver are Windows-only)
@@ -225,10 +239,36 @@ crashing, so header/nav/theme changes are still visible.
 npm run tauri:build
 ```
 
-Produces MSI and NSIS installers under
-`src-tauri/target/release/bundle/`. The same command runs in CI on every
-push/PR to `main`/`develop` (see `.github/workflows/build.yml`), alongside
-`cargo test` from `src-tauri/`.
+Produces an NSIS installer at
+`src-tauri/target/release/bundle/nsis/YomagAudio_<version>_x64-setup.exe`
+(MSI is not built — see below for why). The same command runs in CI on
+every push/PR to `main`/`develop` (see `.github/workflows/build.yml`),
+alongside `cargo test` from `src-tauri/`.
+
+The installer bundles the app's icon and a splash screen (both generated
+from the YomagAudio logo — `src-tauri/icons/`, `src-ui/splashscreen.html`,
+shown in its own borderless window while the main app loads, see
+`main.rs`'s `setup()`), plus the driver's `.sys`/`.inf` as ordinary bundle
+resources (`bundle.resources` in `tauri.conf.json`) under `driver/` in the
+install directory. **Only NSIS is targeted**, not MSI/WiX: the mandatory
+driver warning dialog (`src-tauri/installer-hooks.nsh`, hooked in via
+`bundle.windows.nsis.installerHooks`) needs NSIS's scripting; WiX doesn't
+have an equivalent lightweight customization point in this setup. The
+warning is skipped automatically for silent/unattended installs (`/S`) —
+see the `IfSilent` check in that `.nsh` file.
+
+Rebuilding the driver files the installer bundles (they're **not**
+produced by `npm run tauri:build` itself) is a separate manual step:
+
+```powershell
+& "C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\amd64\MSBuild.exe" `
+  driver\YomagAudioDriver\YomagAudioDriver.vcxproj /p:Configuration=Release /p:Platform=x64 /p:SignMode=Off
+```
+
+(see `driver/YomagAudioDriver/README.md` for why `/p:SignMode=Off` is
+needed). `tauri.conf.json`'s `bundle.resources` points at that build's
+fixed output path (`driver/YomagAudioDriver/x64/Release/`), so it has to
+exist before `npm run tauri:build` runs.
 
 ### The kernel driver (optional, advanced)
 
@@ -242,6 +282,13 @@ see `driver/YomagAudioDriver/README.md`.
 > but a kernel-mode bug is a materially different risk than a bug anywhere
 > else in this project — up to and including a machine crash. If you build
 > and load it, **do it in a VM first.**
+>
+> The installer above places the driver's files on disk (so you don't need
+> a separate download to try it) but deliberately stops there — it does
+> not enable Windows test-signing mode, sign the driver, or load it. Those
+> remain the same deliberate, manual steps documented in
+> `driver/YomagAudioDriver/README.md`'s "What's left before this can
+> actually run" section.
 
 ## Using the app
 

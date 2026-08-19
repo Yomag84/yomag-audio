@@ -28,6 +28,14 @@ not just misbehave in a sandboxed process.
 **Test this in a VM first**, not on your daily-driver machine, until you've
 confirmed it's stable.
 
+> The main app's NSIS installer bundles this driver's `.sys`/`.inf` (a
+> Release build of it) so they're on disk after a normal install — see the
+> root `README.md`'s "Build an installer" section. That's purely a file
+> copy with a mandatory warning dialog; none of the "not installed, not
+> loaded, not tested" status above changes because of it. Everything in
+> "What's left before this can actually run" further down is still a
+> deliberate step you take yourself.
+
 ## Architecture
 
 | File | Purpose |
