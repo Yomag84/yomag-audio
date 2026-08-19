@@ -529,10 +529,9 @@ opt into, not wake up to.
 ## Community & support
 
 [![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-db61a2?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/Yomag84)
-[![Discord](https://img.shields.io/discord/REPLACE_WITH_SERVER_ID?logo=discord&logoColor=white&label=Discord)](https://discord.gg/REPLACE_WITH_INVITE_CODE)
-<!-- TODO: swap both placeholders above once the server exists - the badge needs the server ID (right-click the server icon > Copy Server ID, with Developer Mode on), the link needs a permanent invite code. -->
+[![Discord](https://img.shields.io/discord/1539426555451809812?logo=discord&logoColor=white&label=Discord)](https://discord.gg/fKWNtBHYHt)
 
-- **Discord** — [join the server](https://discord.gg/REPLACE_WITH_INVITE_CODE) for help, feature discussion, and sharing routing/recording setups.
+- **Discord** — [join the server](https://discord.gg/fKWNtBHYHt) for help, feature discussion, and sharing routing/recording setups.
 - **Sponsor** — if YomagAudio is useful to you, you can support its development via [GitHub Sponsors](https://github.com/sponsors/Yomag84).
 - **Issues** — bug reports and feature requests belong on the [issue tracker](https://github.com/Yomag84/yomag-audio/issues).
 
