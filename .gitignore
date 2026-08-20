@@ -7,3 +7,5 @@
 /dist
 *.log
 /community/discord_token.txt
+/src-tauri/updater.key
+/src-tauri/updater.key.pub
