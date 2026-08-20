@@ -2,6 +2,7 @@
   "name": "yomag-audio",
   "private": true,
   "version": "0.1.0",
+  "description": "Windows audio routing, mixing, and multitrack recording app",
   "type": "module",
   "scripts": {
     "dev": "vite",

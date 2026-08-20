@@ -2,6 +2,8 @@
 name = "yomag-audio"
 version = "0.1.0"
 edition = "2021"
+description = "Windows audio routing, mixing, and multitrack recording app"
+homepage = "https://github.com/Yomag84/yomag-audio"
 
 [build-dependencies]
 tauri-build = { version = "2.0", features = [] }
@@ -20,6 +22,7 @@ windows = { version = "0.58", features = [
     "implement",
     "Win32_Media",
     "Win32_Media_Audio",
+    "Win32_Media_Audio_Endpoints",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
     "Win32_System_Threading",

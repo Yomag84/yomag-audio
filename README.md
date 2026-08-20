@@ -103,7 +103,7 @@ push channel (`audio://levels`) for live meter data.
                             │ WASAPI (shared or exclusive mode)
 ┌───────────────────────────▼───────────────────────────────────────┐
 │  Windows audio subsystem + YomagAudioDriver.sys                   │
-│  (WDM/PortCls virtual audio cable — driver/YomagAudioDriver)       │
+│  (ACX virtual audio cable — driver/YomagAudioDriver)               │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -145,7 +145,7 @@ Key design decisions baked into the engine:
 | WAV I/O | [`hound`](https://docs.rs/hound) | Pure-Rust WAV read/write; its 32-bit float PCM format matches the engine's internal sample format with zero conversion |
 | Multitrack preview | Web Audio API (`AudioContext`, `AudioBufferSourceNode`, `GainNode`, `BiquadFilterNode`) | Native browser DSP for live editor playback/scrub/EQ preview, so the frontend needs no audio-processing library of its own — the authoritative render still happens in Rust |
 | Concurrency | `parking_lot`, `arc-swap`, `tokio` | Low-overhead locking for shared state; async runtime for network I/O |
-| Kernel driver | C++ WDM/PortCls (`driver/YomagAudioDriver`), modeled on Microsoft's Sysvad sample | The only way to expose a device that *any* Windows app can select directly, not just apps YomagAudio can hook into |
+| Kernel driver | C++ ACX (Audio Class eXtension) on KMDF (`driver/YomagAudioDriver`) | The only way to expose a device that *any* Windows app can select directly, not just apps YomagAudio can hook into |
 | CI | GitHub Actions (`.github/workflows/build.yml`) | `cargo test` + `npm run tauri:build` on `windows-latest`, installer artifacts uploaded per run |
 | Packaging | Tauri bundler → MSI + NSIS installers | Standard Windows distribution formats |
 
@@ -191,7 +191,7 @@ yomag-audio/
 │  │  └─ audio/                  The engine (see Architecture above)
 │  ├─ tauri.conf.json            Window, bundler, dev-server config
 │  └─ capabilities/default.json  Tauri permission manifest
-├─ driver/YomagAudioDriver/     Kernel-mode virtual audio cable (C++, WDM/PortCls)
+├─ driver/YomagAudioDriver/     Kernel-mode virtual audio cable (C++, ACX/KMDF)
 ├─ community/                   Discord server setup script (see community/README.md)
 ├─ .github/workflows/build.yml  CI: test + build + upload installer
 ├─ .github/FUNDING.yml          Powers the repo's native "Sponsor" button
@@ -325,10 +325,12 @@ see `driver/YomagAudioDriver/README.md`.
 
 **Capture.** Hitting Record on a virtual device snapshots its *current*
 sources and gives each one its own dedicated WAV writer thread, tapping
-raw pre-fader audio straight out of the mixer tick
-(`SourceEntry::record_tap` in `engine.rs`) — so a source you mute mid-take
-is still fully captured, and a gain move mid-take doesn't touch the file.
-A source added after Record was pressed gets no track; a source removed
+post-gain, pre-mute audio straight out of the mixer tick
+(`SourceEntry::record_tap` in `engine.rs`) — so a gain change you make to
+compensate for a quiet source reaches the file, while a source you mute
+mid-take is still fully captured (muting only silences live monitoring/mix
+output, not the recording). A source added after Record was pressed gets
+no track; a source removed
 mid-take has its track finalized immediately rather than orphaned. Each
 session lands in `<app data dir>/recordings/<session_id>/` as
 `manifest.json` (the immutable facts of the take: device, tracks, sample

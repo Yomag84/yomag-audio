@@ -47,6 +47,10 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
+    "publisher": "YomagAudio",
+    "homepage": "https://github.com/Yomag84/yomag-audio",
+    "shortDescription": "Windows audio routing, mixing, and multitrack recording app",
+    "longDescription": "YomagAudio is a Windows desktop application for routing, mixing, and monitoring audio between hardware devices, running applications, and other machines on the network, with built-in multitrack recording and editing.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
