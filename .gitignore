@@ -1,5 +1,8 @@
 /node_modules
 /src-tauri/target
+!/src-tauri/target/release/bundle
+!/src-tauri/target/release/bundle/nsis
+!/src-tauri/target/release/bundle/nsis/*.exe
 /src-tauri/ui
 /dist
 *.log

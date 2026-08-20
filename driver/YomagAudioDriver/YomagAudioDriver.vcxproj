@@ -82,7 +82,14 @@
     <ClInclude Include="driver.h" />
   </ItemGroup>
   <ItemGroup>
-    <Inf Include="YomagAudioDriver.inf" />
+    <!-- Without these, StampInf passes "*" for date/version and
+         auto-generates DriverVer from the build machine's clock instead of
+         a version we actually track (see YomagAudioDriver.inf's own
+         DriverVer line for the source of truth this mirrors). -->
+    <Inf Include="YomagAudioDriver.inf">
+      <SpecifyDriverVerDirectiveVersion>true</SpecifyDriverVerDirectiveVersion>
+      <TimeStamp>1.0.1.0</TimeStamp>
+    </Inf>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />
