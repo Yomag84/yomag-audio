@@ -43,6 +43,8 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(AppState::new())
         .setup(|app| {
             #[cfg(debug_assertions)]
@@ -150,6 +152,8 @@ fn main() {
             let sponsor_item =
                 MenuItemBuilder::with_id("menu-sponsor", "Sponsor · Donate · Send a Gift…").build(app)?;
             let about_item = MenuItemBuilder::with_id("menu-about", "About YomagAudio").build(app)?;
+            let check_for_updates_item =
+                MenuItemBuilder::with_id("menu-check-for-updates", "Check for Updates…").build(app)?;
             let help_menu = SubmenuBuilder::new(app, "Help")
                 .item(&documentation_item)
                 .separator()
@@ -157,6 +161,7 @@ fn main() {
                 .item(&discord_item)
                 .item(&sponsor_item)
                 .separator()
+                .item(&check_for_updates_item)
                 .item(&about_item)
                 .build()?;
 
@@ -200,6 +205,9 @@ fn main() {
                 }
                 "menu-about" => {
                     let _ = menu_app_handle.emit("menu://about", ());
+                }
+                "menu-check-for-updates" => {
+                    let _ = menu_app_handle.emit("menu://check-for-updates", ());
                 }
                 "menu-documentation" => {
                     let _ = menu_app_handle.emit("menu://documentation", ());

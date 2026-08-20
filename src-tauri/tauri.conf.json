@@ -47,6 +47,7 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
+    "createUpdaterArtifacts": true,
     "publisher": "YomagAudio",
     "homepage": "https://github.com/Yomag84/yomag-audio",
     "shortDescription": "Windows audio routing, mixing, and multitrack recording app",
@@ -68,6 +69,14 @@
       "nsis": {
         "installerHooks": "installer-hooks.nsh"
       }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/Yomag84/yomag-audio/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEVCNjUwNTAwNjIwRUY1MjEKUldRaDlRNWlBQVZsNnlIUnIvVjlkbHRzaHRGQXNDcnhwZ09zTmYxMVdGNGQwMnl6bkNWTS96dDEK"
     }
   }
 }

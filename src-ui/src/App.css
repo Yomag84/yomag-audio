@@ -91,6 +91,23 @@
   flex-shrink: 0;
 }
 
+.update-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: var(--accent-soft);
+  border-bottom: 1px solid var(--accent);
+  color: var(--accent-strong);
+  padding: 9px 18px;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.update-banner .btn {
+  flex-shrink: 0;
+}
+
 .view-tabs {
   display: flex;
   align-items: center;

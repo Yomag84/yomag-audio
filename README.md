@@ -270,6 +270,42 @@ needed). `tauri.conf.json`'s `bundle.resources` points at that build's
 fixed output path (`driver/YomagAudioDriver/x64/Release/`), so it has to
 exist before `npm run tauri:build` runs.
 
+### Auto-update
+
+The installed app checks for updates via `@tauri-apps/plugin-updater` (Rust
+side: `tauri-plugin-updater`, registered in `main.rs`) against
+`https://github.com/Yomag84/yomag-audio/releases/latest/download/latest.json`
+(`plugins.updater.endpoints` in `tauri.conf.json`) — once silently on every
+launch, and again on demand from Help → *Check for Updates…* or the toggle
+in Settings → *Updates*. Every update is verified against the Ed25519
+public key embedded in that same config (`plugins.updater.pubkey`) before
+it's installed; anything not signed by the matching private key is
+rejected, so the update channel is only as trustworthy as that key's
+secrecy.
+
+Whether a found update installs itself automatically or waits for you to
+click *Install & Restart* is controlled by the "Automatically install
+updates" toggle in Settings → *Updates* (on by default, persisted to
+`localStorage`, see `src-ui/src/lib/settings.ts`).
+
+**Publishing a release** (so the endpoint above has something to find) is
+`.github/workflows/release.yml`, triggered by pushing a `vX.Y.Z` tag or
+running it manually from the Actions tab. It uses `tauri-apps/tauri-action`
+to build the NSIS installer, sign it, generate `latest.json`, and attach
+everything to a (draft) GitHub Release — driven by two repo secrets:
+
+- `TAURI_SIGNING_PRIVATE_KEY` — the full contents of the updater signing
+  key generated via `npx tauri signer generate` (this repo's key was
+  generated with `--ci`, i.e. no password, so
+  `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` can be left unset).
+
+**Losing this private key means existing installs can never verify a future
+update again** — there's no recovery short of shipping a new pubkey and
+asking every user to reinstall manually, so treat it like any other
+production credential: never commit it, store it somewhere durable (a
+password manager, not just the CI secret), and don't regenerate it unless
+you're prepared for that consequence.
+
 ### The kernel driver (optional, advanced)
 
 The driver lets YomagAudio create real Windows audio endpoints (Network

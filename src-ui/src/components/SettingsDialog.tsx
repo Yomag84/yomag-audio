@@ -1,5 +1,6 @@
 import { useMemo } from "react"
 import type { AudioDeviceInfo, EngineInfo, VirtualDeviceSnapshot } from "../types"
+import type { Update } from "../lib/updater"
 import "./SettingsDialog.css"
 
 interface SettingsDialogProps {
@@ -10,6 +11,12 @@ interface SettingsDialogProps {
   onSetMonitorBufferMs: (deviceId: string, monitorName: string, ms: number) => void
   onSetMonitorDelayMs: (deviceId: string, monitorName: string, ms: number) => void
   onSetMonitorExclusive: (deviceId: string, monitorName: string, exclusive: boolean) => void
+  autoUpdateEnabled: boolean
+  onSetAutoUpdateEnabled: (enabled: boolean) => void
+  updateStatus: "idle" | "checking" | "downloading" | "up-to-date" | "error"
+  updateInfo: Update | null
+  onCheckForUpdates: () => void
+  onInstallUpdateNow: (update: Update) => void
 }
 
 export function SettingsDialog({
@@ -20,6 +27,12 @@ export function SettingsDialog({
   onSetMonitorBufferMs,
   onSetMonitorDelayMs,
   onSetMonitorExclusive,
+  autoUpdateEnabled,
+  onSetAutoUpdateEnabled,
+  updateStatus,
+  updateInfo,
+  onCheckForUpdates,
+  onInstallUpdateNow,
 }: SettingsDialogProps) {
   // A physical device counts as "in use" if it's wired in as a source
   // (matched by id, which is the device name for real inputs) or a monitor
@@ -52,6 +65,52 @@ export function SettingsDialog({
             ×
           </button>
         </div>
+
+        <section className="settings-section">
+          <h3>Updates</h3>
+          <div className="settings-kv">
+            <div>
+              <span>Automatically install updates</span>
+              <span>
+                <input
+                  type="checkbox"
+                  checked={autoUpdateEnabled}
+                  onChange={(e) => onSetAutoUpdateEnabled(e.target.checked)}
+                  title="When off, a found update waits for you to click Install & Restart instead of installing itself"
+                />
+              </span>
+            </div>
+            <div>
+              <span>Status</span>
+              <span>
+                {updateStatus === "checking" && "Checking…"}
+                {updateStatus === "downloading" && "Downloading…"}
+                {updateStatus === "up-to-date" && "Up to date"}
+                {updateStatus === "error" && "Check failed"}
+                {updateStatus === "idle" && updateInfo && `Update available: v${updateInfo.version}`}
+                {updateStatus === "idle" && !updateInfo && "Up to date"}
+              </span>
+            </div>
+            <div>
+              <span></span>
+              <span>
+                {updateInfo && updateStatus === "idle" ? (
+                  <button className="btn btn-primary" onClick={() => onInstallUpdateNow(updateInfo)}>
+                    Install &amp; Restart
+                  </button>
+                ) : (
+                  <button
+                    className="btn btn-secondary"
+                    onClick={onCheckForUpdates}
+                    disabled={updateStatus === "checking" || updateStatus === "downloading"}
+                  >
+                    Check for Updates
+                  </button>
+                )}
+              </span>
+            </div>
+          </div>
+        </section>
 
         <section className="settings-section">
           <h3>Audio Devices</h3>

@@ -1,0 +1,58 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+jobs:
+  release:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Cache cargo registry and git
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+
+      - name: Cache cargo build output
+        uses: actions/cache@v4
+        with:
+          path: src-tauri/target
+          key: ${{ runner.os }}-cargo-build-${{ hashFiles('src-tauri/Cargo.lock') }}
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      # tauri-action builds the NSIS installer (same as build.yml's `npm run
+      # tauri:build`), then - because TAURI_SIGNING_PRIVATE_KEY is set below
+      # and tauri.conf.json's bundle.createUpdaterArtifacts is true - also
+      # produces the signed updater bundle + a latest.json manifest, and
+      # uploads all of it to a GitHub Release named after the pushed tag.
+      # The app's updater endpoint (see tauri.conf.json's plugins.updater)
+      # points at that release's latest.json, so publishing a release here
+      # *is* what makes auto-update find a new version.
+      - name: Build and publish release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "YomagAudio ${{ github.ref_name }}"
+          releaseDraft: true
+          prerelease: false

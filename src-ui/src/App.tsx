@@ -15,6 +15,8 @@ import { EditorPage } from "./components/editor/EditorPage"
 import { useDeviceLevels } from "./hooks/useDeviceLevels"
 import { availableInputDevices, availableMonitorDevices, availableVirtualDeviceSources } from "./lib/availability"
 import { DISCORD_URL, DOCS_ISSUES_URL, DOCS_SPONSOR_URL } from "./lib/links"
+import { getAutoUpdateEnabled, setAutoUpdateEnabled as persistAutoUpdateEnabled } from "./lib/settings"
+import { checkForUpdate, installUpdateAndRelaunch, type Update, type UpdateProgress } from "./lib/updater"
 import type {
   AppAudioSession,
   AudioDeviceInfo,
@@ -63,6 +65,13 @@ function App() {
   const [activeRecordingDeviceId, setActiveRecordingDeviceId] = useState<string | null>(null)
   const [recordingStartedAt, setRecordingStartedAt] = useState<number | null>(null)
   const [recordingElapsedLabel, setRecordingElapsedLabel] = useState("0:00")
+  const [autoUpdateEnabled, setAutoUpdateEnabledState] = useState<boolean>(getAutoUpdateEnabled)
+  const [updateInfo, setUpdateInfo] = useState<Update | null>(null)
+  const [updateStatus, setUpdateStatus] = useState<
+    "idle" | "checking" | "downloading" | "up-to-date" | "error"
+  >("idle")
+  const [updateError, setUpdateError] = useState<string | null>(null)
+  const [updateProgress, setUpdateProgress] = useState<UpdateProgress | null>(null)
   const selectedIdRef = useRef<string | null>(null)
 
   const levels = useDeviceLevels()
@@ -71,6 +80,72 @@ function App() {
     document.documentElement.setAttribute("data-theme", theme)
     window.localStorage.setItem(THEME_STORAGE_KEY, theme)
   }, [theme])
+
+  const handleSetAutoUpdateEnabled = (enabled: boolean) => {
+    setAutoUpdateEnabledState(enabled)
+    persistAutoUpdateEnabled(enabled)
+  }
+
+  const handleInstallUpdateNow = useCallback(
+    async (update: Update) => {
+      setUpdateStatus("downloading")
+      setUpdateError(null)
+      setUpdateProgress(null)
+      try {
+        await installUpdateAndRelaunch(update, setUpdateProgress)
+        // installUpdateAndRelaunch() ends by restarting the process - if
+        // execution ever reaches here, the relaunch itself didn't happen
+        // (e.g. blocked), so there's nothing more to update in state for.
+      } catch (err) {
+        setUpdateError(String(err))
+        setUpdateStatus("error")
+      }
+    },
+    []
+  )
+
+  // Runs once on launch (silent - no "up to date" banner, since nobody
+  // wants that on every startup) and again on demand from the "Check for
+  // Updates…" menu item (menu://check-for-updates below, which does show
+  // one). When auto-update is on, a found update installs and restarts the
+  // app immediately with no further confirmation; when it's off, updateInfo
+  // just gets set and the banner below offers a manual "Install & Restart".
+  const runUpdateCheck = useCallback(
+    async (manual: boolean) => {
+      setUpdateStatus("checking")
+      setUpdateError(null)
+      try {
+        const update = await checkForUpdate()
+        if (!update) {
+          setUpdateInfo(null)
+          setUpdateStatus(manual ? "up-to-date" : "idle")
+          return
+        }
+        setUpdateInfo(update)
+        setUpdateStatus("idle")
+        if (getAutoUpdateEnabled()) {
+          await handleInstallUpdateNow(update)
+        }
+      } catch (err) {
+        setUpdateError(String(err))
+        setUpdateStatus("error")
+      }
+    },
+    [handleInstallUpdateNow]
+  )
+
+  useEffect(() => {
+    runUpdateCheck(false)
+    // Deliberately once on mount - update availability doesn't change fast
+    // enough to warrant polling, and the menu item covers on-demand checks.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
+    if (updateStatus !== "up-to-date") return
+    const timeout = setTimeout(() => setUpdateStatus("idle"), 4000)
+    return () => clearTimeout(timeout)
+  }, [updateStatus])
 
   const refreshPhysicalDevices = useCallback(async () => {
     try {
@@ -522,11 +597,12 @@ function App() {
       listen("menu://discord", () => open(DISCORD_URL)),
       listen("menu://sponsor", () => open(DOCS_SPONSOR_URL)),
       listen("menu://settings", () => setShowSettings(true)),
+      listen("menu://check-for-updates", () => runUpdateCheck(true)),
     ]
     return () => {
       unlistenPromises.forEach((p) => p.then((unlisten) => unlisten()))
     }
-  }, [])
+  }, [runUpdateCheck])
 
   const selectedDevice = virtualDevices.find((d) => d.id === selectedId) ?? null
   const inputDevices = useMemo(() => physicalDevices.filter((d) => d.is_input), [physicalDevices])
@@ -603,6 +679,35 @@ function App() {
       </header>
 
       {error && <div className="error-banner">{error}</div>}
+
+      {updateInfo && updateStatus === "idle" && !autoUpdateEnabled && (
+        <div className="update-banner">
+          <span>
+            YomagAudio {updateInfo.version} is available (you're on {updateInfo.currentVersion}).
+          </span>
+          <button className="btn btn-primary" onClick={() => handleInstallUpdateNow(updateInfo)}>
+            Install &amp; Restart
+          </button>
+        </div>
+      )}
+      {updateStatus === "downloading" && (
+        <div className="update-banner">
+          <span>
+            Downloading update
+            {updateProgress?.total
+              ? ` — ${Math.round((updateProgress.downloaded / updateProgress.total) * 100)}%`
+              : "…"}
+          </span>
+        </div>
+      )}
+      {updateStatus === "up-to-date" && (
+        <div className="update-banner">
+          <span>You're on the latest version.</span>
+        </div>
+      )}
+      {updateStatus === "error" && updateError && (
+        <div className="error-banner">Update check failed: {updateError}</div>
+      )}
 
       <nav className="view-tabs">
         <div className="view-tabs-group">
@@ -835,6 +940,12 @@ function App() {
           onSetMonitorBufferMs={handleSetMonitorBufferMs}
           onSetMonitorDelayMs={handleSetMonitorDelayMs}
           onSetMonitorExclusive={handleSetMonitorExclusive}
+          autoUpdateEnabled={autoUpdateEnabled}
+          onSetAutoUpdateEnabled={handleSetAutoUpdateEnabled}
+          updateStatus={updateStatus}
+          updateInfo={updateInfo}
+          onCheckForUpdates={() => runUpdateCheck(true)}
+          onInstallUpdateNow={handleInstallUpdateNow}
         />
       )}
 
