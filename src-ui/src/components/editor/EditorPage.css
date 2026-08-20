@@ -1,9 +1,79 @@
+/* The editor deliberately commits to one look - a dark hardware-console
+ * skin - regardless of the app's own light/dark toggle, the same way a
+ * real multitrack recorder's chrome doesn't change with room lighting.
+ * Every design token the rest of the app defines on :root is redefined
+ * here on .editor-page instead: since custom properties cascade to
+ * descendants and a value set closer to the element wins, every existing
+ * component under the editor (TrackLane, MixerView, Knob, TransportBar,
+ * EffectsRack) picks up this palette automatically through the exact same
+ * var(--bg-surface) etc. references they already use - no need to touch
+ * their own stylesheets just to reskin colors. */
 .editor-page {
+  --bg-app: #1b1b1e;
+  --bg-surface: linear-gradient(180deg, #3c3c42 0%, #2b2b30 100%);
+  --bg-surface-alt: #333338;
+  --bg-surface-sunken: #17171a;
+  --border: #0c0c0e;
+  --border-strong: #55555e;
+  --text-primary: #ece9e0;
+  --text-secondary: #c6c3b8;
+  --text-muted: #8e8b80;
+  --accent: #d4a941;
+  --accent-strong: #e8c065;
+  --accent-soft: rgba(212, 169, 65, 0.2);
+  --accent-gradient: linear-gradient(135deg, #e8c065 0%, #b3841f 100%);
+  --accent-contrast: #1a1a1d;
+  --accent2: #5fd66a;
+  --accent2-strong: #7fe98a;
+  --accent2-soft: rgba(95, 214, 106, 0.18);
+  --success: #5fd66a;
+  --success-soft: rgba(95, 214, 106, 0.18);
+  --danger: #ff4a3d;
+  --danger-soft: rgba(255, 74, 61, 0.18);
+  --warning: #e8b23d;
+  --warning-soft: rgba(232, 178, 61, 0.18);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.55);
+  --shadow-md: 0 4px 10px rgba(0, 0, 0, 0.6);
+  --shadow-lg: 0 10px 28px rgba(0, 0, 0, 0.65);
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 14px;
+  --radius-pill: 999px;
+
   flex: 1;
   display: flex;
   flex-direction: column;
   min-height: 0;
-  background: var(--bg-app);
+  background: repeating-linear-gradient(180deg, #202023 0px, #1c1c1f 2px, #1b1b1e 4px);
+  color: var(--text-primary);
+}
+
+.console-row {
+  display: flex;
+  gap: 10px;
+  padding: 10px 18px;
+  background: linear-gradient(180deg, #29292d 0%, #202023 100%);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  overflow-x: auto;
+}
+
+.console-panel {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  padding: 10px 12px;
+  flex-shrink: 0;
+}
+
+.console-panel h4 {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--accent-strong);
+  margin-bottom: 8px;
 }
 
 .editor-tabs {
@@ -30,14 +100,14 @@
 }
 
 .editor-tabs button.active {
-  color: #fff;
-  background: var(--accent2);
+  color: var(--accent-contrast);
+  background: var(--accent-gradient);
 }
 
 .editor-export-message {
   padding: 8px 18px;
   font-size: 12px;
-  color: var(--accent2);
+  color: var(--accent2-strong);
   background: var(--accent2-soft);
   border-bottom: 1px solid var(--border);
 }
@@ -45,11 +115,17 @@
 .editor-tracks {
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
+  /* The single shared scroll surface for both axes: TimelineRuler and
+     every TrackLane's canvas are all sized to the whole arrangement (see
+     ClipCanvas.tsx/TimelineRuler.tsx), wider than the viewport once
+     zoomed in, and this is what actually scrolls them - their own
+     sticky-positioned headers/ruler resolve against this ancestor. */
+  overflow: auto;
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 12px;
-  padding: 16px 18px;
+  padding: 0 18px 16px;
 }
 
 .editor-track-row {

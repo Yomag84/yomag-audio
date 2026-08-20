@@ -1,4 +1,4 @@
-import type { EqBand, TrackProject } from "../../types"
+import type { EffectReturn, EqBand, TrackProject } from "../../types"
 import { colorForTrack } from "../../lib/trackColors"
 import { Knob } from "./Knob"
 import { EffectsRack } from "./EffectsRack"
@@ -6,13 +6,17 @@ import "./MixerView.css"
 
 interface MixerViewProps {
   tracks: TrackProject[]
+  returns: EffectReturn[]
   onGainChange: (sourceId: string, gain: number) => void
   onPanChange: (sourceId: string, pan: number) => void
   onMuteToggle: (sourceId: string) => void
   onSoloToggle: (sourceId: string) => void
   onEqChange: (sourceId: string, bands: EqBand[]) => void
+  onSendChange: (sourceId: string, returnId: string, amount: number) => void
   openFxTrackId: string | null
   onToggleFx: (sourceId: string) => void
+  onExportTrack: (sourceId: string) => void
+  exportingTrackId: string | null
 }
 
 function panLabel(pan: number): string {
@@ -29,13 +33,17 @@ function panLabel(pan: number): string {
  */
 export function MixerView({
   tracks,
+  returns,
   onGainChange,
   onPanChange,
   onMuteToggle,
   onSoloToggle,
   onEqChange,
+  onSendChange,
   openFxTrackId,
   onToggleFx,
+  onExportTrack,
+  exportingTrackId,
 }: MixerViewProps) {
   if (tracks.length === 0) {
     return (
@@ -98,11 +106,36 @@ export function MixerView({
                 </div>
                 <span className="mixer-strip-gain-label">{Math.round(track.gain * 100)}%</span>
 
+                {returns.length > 0 && (
+                  <div className="mixer-strip-sends">
+                    {returns.map((r) => (
+                      <Knob
+                        key={r.id}
+                        value={track.sends[r.id] ?? 0}
+                        min={0}
+                        max={1}
+                        color="var(--accent2)"
+                        label={r.name}
+                        onChange={(amount) => onSendChange(track.source_id, r.id, amount)}
+                      />
+                    ))}
+                  </div>
+                )}
+
                 <button
                   className={`track-action-btn ${openFxTrackId === track.source_id ? "active" : ""}`}
                   onClick={() => onToggleFx(track.source_id)}
                 >
                   FX
+                </button>
+
+                <button
+                  className="track-action-btn mixer-strip-save"
+                  onClick={() => onExportTrack(track.source_id)}
+                  disabled={exportingTrackId === track.source_id}
+                  title="Save this track's own edit list (clips, gain, pan, EQ) to its own WAV file"
+                >
+                  {exportingTrackId === track.source_id ? "Saving…" : "Save"}
                 </button>
               </div>
             </div>

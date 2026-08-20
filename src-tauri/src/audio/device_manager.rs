@@ -1,5 +1,12 @@
 use cpal::traits::{DeviceTrait, HostTrait};
 use serde::Serialize;
+use std::collections::HashMap;
+use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
+use windows::Win32::Media::Audio::Endpoints::IAudioMeterInformation;
+use windows::Win32::Media::Audio::{eCapture, IMMDeviceEnumerator, MMDeviceEnumerator, DEVICE_STATE_ACTIVE};
+use windows::Win32::System::Com::{
+    CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED, STGM_READ,
+};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AudioDeviceInfo {
@@ -87,6 +94,55 @@ impl Default for DeviceManager {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Live peak level (0.0-1.0, silence to full scale) for every active input
+/// device, keyed by the same friendly name `list_input_devices` returns -
+/// read via `IAudioMeterInformation`, which WASAPI maintains for every
+/// active endpoint regardless of whether anything has opened a stream on
+/// it, so this needs no capture of its own (cpal has no equivalent, hence
+/// going straight to the `windows` crate here rather than through it, same
+/// as `exclusive_output`/`loopback`/`process_audio`).
+pub fn list_input_device_meters() -> HashMap<String, f32> {
+    // Same "run on a brand new thread" reasoning as `list_app_sessions`:
+    // Tauri's blocking-command thread pool reuses OS threads that may
+    // already have COM initialized in a different apartment mode by
+    // something else (e.g. cpal) running on that same pooled thread.
+    std::thread::spawn(|| unsafe {
+        if CoInitializeEx(None, COINIT_MULTITHREADED).is_err() {
+            return HashMap::new();
+        }
+        let result = list_input_device_meters_inner().unwrap_or_default();
+        CoUninitialize();
+        result
+    })
+    .join()
+    .unwrap_or_default()
+}
+
+unsafe fn list_input_device_meters_inner() -> Result<HashMap<String, f32>, String> {
+    let enumerator: IMMDeviceEnumerator =
+        CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).map_err(|e| e.to_string())?;
+    let collection = enumerator
+        .EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE)
+        .map_err(|e| e.to_string())?;
+    let count = collection.GetCount().map_err(|e| e.to_string())?;
+
+    let mut levels = HashMap::new();
+    for i in 0..count {
+        let Ok(device) = collection.Item(i) else { continue };
+        let Ok(store) = device.OpenPropertyStore(STGM_READ) else { continue };
+        let Ok(name) = store.GetValue(&PKEY_Device_FriendlyName).map(|v| v.to_string()) else {
+            continue;
+        };
+        let meter: IAudioMeterInformation = match device.Activate(CLSCTX_ALL, None) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let peak = meter.GetPeakValue().unwrap_or(0.0);
+        levels.insert(name, peak);
+    }
+    Ok(levels)
 }
 
 /// Name substrings (case-insensitive) that indicate a device is NOT the

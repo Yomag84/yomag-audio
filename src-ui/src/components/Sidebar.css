@@ -128,7 +128,22 @@
 
 .sidebar-footer {
   display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 6px;
   padding: 10px;
   border-top: 1px solid var(--border);
+}
+
+.sidebar-create-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.sidebar-create-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-right: 2px;
 }

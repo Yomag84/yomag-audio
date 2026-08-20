@@ -141,8 +141,24 @@ fn main() {
                 MenuItemBuilder::with_id("menu-delete-device", "Delete Selected Device").build(app)?;
             let device_menu = SubmenuBuilder::new(app, "Device").item(&delete_device_item).build()?;
 
+            let documentation_item = MenuItemBuilder::with_id("menu-documentation", "Documentation")
+                .accelerator("F1")
+                .build(app)?;
+            let report_issue_item =
+                MenuItemBuilder::with_id("menu-report-issue", "Report an Issue…").build(app)?;
+            let discord_item = MenuItemBuilder::with_id("menu-discord", "Join Discord").build(app)?;
+            let sponsor_item =
+                MenuItemBuilder::with_id("menu-sponsor", "Sponsor · Donate · Send a Gift…").build(app)?;
             let about_item = MenuItemBuilder::with_id("menu-about", "About YomagAudio").build(app)?;
-            let help_menu = SubmenuBuilder::new(app, "Help").item(&about_item).build()?;
+            let help_menu = SubmenuBuilder::new(app, "Help")
+                .item(&documentation_item)
+                .separator()
+                .item(&report_issue_item)
+                .item(&discord_item)
+                .item(&sponsor_item)
+                .separator()
+                .item(&about_item)
+                .build()?;
 
             let window_menu = MenuBuilder::new(app)
                 .item(&file_menu)
@@ -184,6 +200,18 @@ fn main() {
                 }
                 "menu-about" => {
                     let _ = menu_app_handle.emit("menu://about", ());
+                }
+                "menu-documentation" => {
+                    let _ = menu_app_handle.emit("menu://documentation", ());
+                }
+                "menu-report-issue" => {
+                    let _ = menu_app_handle.emit("menu://report-issue", ());
+                }
+                "menu-discord" => {
+                    let _ = menu_app_handle.emit("menu://discord", ());
+                }
+                "menu-sponsor" => {
+                    let _ = menu_app_handle.emit("menu://sponsor", ());
                 }
                 _ => {}
             });
@@ -244,6 +272,8 @@ fn main() {
             commands::audio::set_device_output_channels,
             commands::audio::add_device_source,
             commands::audio::remove_device_source,
+            commands::audio::add_virtual_device_source,
+            commands::audio::list_device_meters,
             commands::audio::set_device_source_gain,
             commands::audio::set_device_source_muted,
             commands::audio::set_connection,
@@ -275,6 +305,7 @@ fn main() {
             commands::recording::load_recording_project,
             commands::recording::save_recording_project,
             commands::recording::render_mixdown,
+            commands::recording::render_track_export,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

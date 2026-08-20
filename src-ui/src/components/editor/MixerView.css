@@ -78,3 +78,13 @@
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
+
+.mixer-strip-sends {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+  width: 100%;
+  align-items: center;
+}

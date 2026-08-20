@@ -6,6 +6,12 @@ interface ClipCanvasProps {
   clips: Clip[]
   peaks: PeakData
   sourceDurationFrames: number
+  /** Total arrangement length, in frames - drives the canvas's own pixel
+   * width (see canvasWidth below) rather than the track's own source
+   * length, so every track's canvas - and the TimelineRuler above them -
+   * share one width and stay aligned regardless of which track happens to
+   * be longest. */
+  timelineDurationFrames: number
   sampleRate: number
   pixelsPerSecond: number
   playheadFrame: number
@@ -15,6 +21,12 @@ interface ClipCanvasProps {
   onSelectClip: (clipId: string | null) => void
   onSeek: (frame: number) => void
 }
+
+const CANVAS_HEIGHT_PX = 72
+const CANVAS_TRAILING_PADDING_PX = 80
+// Matches TrackLane.css's fixed sticky-header width (700px) so a short
+// recording's canvas is never narrower than the header sitting above it.
+const CANVAS_MIN_WIDTH_PX = 700
 
 type DragMode = "move" | "trim-left" | "trim-right"
 
@@ -50,6 +62,7 @@ export function ClipCanvas({
   clips,
   peaks,
   sourceDurationFrames,
+  timelineDurationFrames,
   sampleRate,
   pixelsPerSecond,
   playheadFrame,
@@ -66,18 +79,22 @@ export function ClipCanvas({
   const frameToX = (frame: number) => frame / framesPerPixel
   const xToFrame = (x: number) => Math.max(0, Math.round(x * framesPerPixel))
 
+  // Sized to the whole arrangement (not just this track's own clips) so
+  // every track's canvas - and the TimelineRuler above them - share one
+  // width and stay pixel-aligned as the shared container scrolls.
+  const canvasWidth = Math.max(CANVAS_MIN_WIDTH_PX, Math.round(frameToX(timelineDurationFrames)) + CANVAS_TRAILING_PADDING_PX)
+
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
     const ctx = canvas.getContext("2d")
     if (!ctx) return
 
-    const width = canvas.clientWidth
-    const height = canvas.clientHeight
-    if (canvas.width !== width) canvas.width = width
+    const height = CANVAS_HEIGHT_PX
+    if (canvas.width !== canvasWidth) canvas.width = canvasWidth
     if (canvas.height !== height) canvas.height = height
 
-    ctx.clearRect(0, 0, width, height)
+    ctx.clearRect(0, 0, canvasWidth, height)
 
     for (const clip of clips) {
       const x0 = frameToX(clip.timeline_start_frame)
@@ -101,7 +118,7 @@ export function ClipCanvas({
     ctx.moveTo(playheadX, 0)
     ctx.lineTo(playheadX, height)
     ctx.stroke()
-  }, [clips, peaks, playheadFrame, selectedClipId, pixelsPerSecond, sampleRate, color])
+  }, [clips, peaks, playheadFrame, selectedClipId, pixelsPerSecond, sampleRate, color, canvasWidth])
 
   const hitTest = (x: number): { clip: Clip; mode: DragMode } | null => {
     for (const clip of clips) {
@@ -119,9 +136,14 @@ export function ClipCanvas({
     const rect = e.currentTarget.getBoundingClientRect()
     const x = e.clientX - rect.left
     const hit = hitTest(x)
+    // Every click moves the playhead to exactly where you clicked, on a
+    // clip or off one - selecting a clip is a separate, additional effect
+    // of clicking on it, not a substitute for the seek every other click
+    // on this canvas already does.
+    onSeek(xToFrame(x))
+
     if (!hit) {
       onSelectClip(null)
-      onSeek(xToFrame(x))
       return
     }
     onSelectClip(hit.clip.id)
@@ -171,6 +193,7 @@ export function ClipCanvas({
     <canvas
       ref={canvasRef}
       className="clip-canvas"
+      style={{ width: canvasWidth, height: CANVAS_HEIGHT_PX }}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}

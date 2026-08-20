@@ -1,0 +1,37 @@
+.levels-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.levels-meters {
+  display: flex;
+  gap: 10px;
+}
+
+.levels-output-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  width: 100%;
+}
+
+.levels-output-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.levels-output-row input[type="range"] {
+  flex: 1;
+  accent-color: var(--accent);
+}
+
+.levels-output-value {
+  font-size: 10px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  min-width: 32px;
+  text-align: right;
+}

@@ -87,3 +87,14 @@ pub fn render_mixdown(
 ) -> Result<String, String> {
     recording::render_mixdown(&recordings_dir(&app)?, &session_id, &project, &output_name)
 }
+
+#[tauri::command]
+pub fn render_track_export(
+    app: tauri::AppHandle,
+    session_id: String,
+    project: RecordingProject,
+    track_source_id: String,
+    output_name: String,
+) -> Result<String, String> {
+    recording::render_track(&recordings_dir(&app)?, &session_id, &project, &track_source_id, &output_name)
+}

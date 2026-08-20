@@ -99,6 +99,37 @@
   color: var(--accent-contrast);
 }
 
+.channel-preset-group {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.btn-preset {
+  min-width: 28px;
+  height: 24px;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.btn-preset:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.btn-preset.active {
+  background: var(--accent-gradient);
+  border-color: transparent;
+  color: var(--accent-contrast);
+}
+
 .routing-card-list {
   display: flex;
   flex-direction: column;

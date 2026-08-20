@@ -1,15 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { invoke } from "@tauri-apps/api/core"
 import { listen } from "@tauri-apps/api/event"
+import { open } from "@tauri-apps/plugin-shell"
 import { Sidebar } from "./components/Sidebar"
 import { RoutingPanel } from "./components/RoutingPanel"
 import { NetworkPanel } from "./components/NetworkPanel"
-import { ApplicationsPanel } from "./components/ApplicationsPanel"
+import { ApplicationsPanel, appSourceId } from "./components/ApplicationsPanel"
 import { SettingsDialog } from "./components/SettingsDialog"
 import { RecordingsPanel } from "./components/RecordingsPanel"
 import { RecordingDetailModal } from "./components/RecordingDetailModal"
+import { AboutDialog } from "./components/AboutDialog"
+import { DocumentationModal } from "./components/DocumentationModal"
 import { EditorPage } from "./components/editor/EditorPage"
 import { useDeviceLevels } from "./hooks/useDeviceLevels"
+import { availableInputDevices, availableMonitorDevices, availableVirtualDeviceSources } from "./lib/availability"
+import { DISCORD_URL, DOCS_ISSUES_URL, DOCS_SPONSOR_URL } from "./lib/links"
 import type {
   AppAudioSession,
   AudioDeviceInfo,
@@ -44,11 +49,13 @@ function App() {
   const [hasSavedProfile, setHasSavedProfile] = useState(false)
   const [busy, setBusy] = useState(false)
   const [showAbout, setShowAbout] = useState(false)
+  const [showDocumentation, setShowDocumentation] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [engineInfo, setEngineInfo] = useState<EngineInfo | null>(null)
   const [systemEndpoints, setSystemEndpoints] = useState<string[]>([])
   const [peers, setPeers] = useState<PeerSnapshot[]>([])
   const [appSessions, setAppSessions] = useState<AppAudioSession[]>([])
+  const [deviceMeters, setDeviceMeters] = useState<Record<string, number>>({})
   const [recordings, setRecordings] = useState<RecordingSummary[]>([])
   const [recordingsLoading, setRecordingsLoading] = useState(false)
   const [detailSession, setDetailSession] = useState<RecordingSummary | null>(null)
@@ -181,7 +188,10 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (view !== "applications") return
+    // Also needed on the Routing view now: the unified "Add Source" picker
+    // (see SourcePicker) lists running applications alongside devices and
+    // other virtual devices.
+    if (view !== "applications" && view !== "routing") return
     refreshAppSessions()
     // Each call spawns a dedicated OS thread and does a full COM session
     // enumeration (see list_app_sessions) - real background work that
@@ -191,6 +201,23 @@ function App() {
     const interval = setInterval(refreshAppSessions, 4000)
     return () => clearInterval(interval)
   }, [view, refreshAppSessions])
+
+  const refreshDeviceMeters = useCallback(async () => {
+    try {
+      setDeviceMeters(await invoke<Record<string, number>>("list_device_meters"))
+    } catch (err) {
+      setError(String(err))
+    }
+  }, [])
+
+  useEffect(() => {
+    // Powers the source picker's device meters - only worth polling while
+    // the Routing view (the only place that picker appears) is open.
+    if (view !== "routing") return
+    refreshDeviceMeters()
+    const interval = setInterval(refreshDeviceMeters, 1000)
+    return () => clearInterval(interval)
+  }, [view, refreshDeviceMeters])
 
   const refreshRecordings = useCallback(async () => {
     setRecordingsLoading(true)
@@ -301,9 +328,14 @@ function App() {
     [refreshVirtualDevices]
   )
 
-  const handleCreate = () =>
+  const handleCreate = (outputChannels: number = 2) =>
     run(async () => {
       const id = await invoke<string>("create_virtual_device", { name: "New Virtual Device" })
+      // New devices default to 2 output channels (see VirtualDevice::new) -
+      // only make the extra round-trip when a wider preset was requested.
+      if (outputChannels !== 2) {
+        await invoke("set_device_output_channels", { deviceId: id, count: outputChannels })
+      }
       setSelectedId(id)
     })
 
@@ -319,11 +351,17 @@ function App() {
   const handleToggleEnabled = (id: string, enabled: boolean) =>
     run(() => invoke("set_device_enabled", { deviceId: id, enabled }))
 
-  const handleAddOutputPair = (id: string, currentChannels: number) =>
-    run(() => invoke("set_device_output_channels", { deviceId: id, count: currentChannels + 2 }))
+  const handleSetOutputChannels = (id: string, count: number) =>
+    run(() => invoke("set_device_output_channels", { deviceId: id, count }))
 
   const handleAddSource = (id: string, sourceId: string) =>
     run(() => invoke("add_device_source", { deviceId: id, sourceId }))
+
+  const handleAddApplicationSource = (id: string, session: AppAudioSession) =>
+    handleAddSource(id, appSourceId(session))
+
+  const handleAddVirtualDeviceSource = (id: string, sourceDeviceId: string) =>
+    run(() => invoke("add_virtual_device_source", { deviceId: id, sourceDeviceId }))
 
   const handleRemoveSource = (id: string, sourceId: string) =>
     run(() => invoke("remove_device_source", { deviceId: id, sourceId }))
@@ -404,6 +442,40 @@ function App() {
   const handleAddNetworkSource = (deviceId: string, peerId: string, remoteDeviceId: string) =>
     run(() => invoke("add_network_source", { deviceId, peerId, remoteDeviceId }))
 
+  /** One-click "send audio to Zoom/Teams/WhatsApp/…" flow: Windows has no
+   * API to inject audio directly into another process, so the only real
+   * mechanism is the same one VB-Cable/Voicemeeter use - create a virtual
+   * microphone via the kernel driver, route this device's mix onto it, and
+   * have the user pick it as their input device inside the target app's
+   * own settings. This composes create_system_endpoint + add_monitor +
+   * set_monitor_channel (mirroring App.tsx's own first-run mic/speaker
+   * wiring) into that one step, then hands the monitor name back so the
+   * caller can tell the user exactly what to select. */
+  const handleQuickRouteToApp = async (appLabel: string, targetDeviceId: string): Promise<string | null> => {
+    setError(null)
+    const monitorName = `YomagAudio for ${appLabel}`
+    try {
+      await invoke("create_system_endpoint", { name: monitorName })
+      await refreshSystemEndpoints()
+      await invoke("add_monitor", { deviceId: targetDeviceId, monitorName })
+      const device = virtualDevices.find((d) => d.id === targetDeviceId)
+      const channelCount = Math.min(device?.output_channels ?? 2, 2)
+      for (let channel = 0; channel < channelCount; channel += 1) {
+        await invoke("set_monitor_channel", {
+          deviceId: targetDeviceId,
+          monitorName,
+          monitorChannel: channel,
+          outputChannel: channel,
+        })
+      }
+      await refreshVirtualDevices()
+      return monitorName
+    } catch (err) {
+      setError(String(err))
+      return null
+    }
+  }
+
   const handleSaveProfile = async () => {
     setError(null)
     try {
@@ -445,6 +517,10 @@ function App() {
       listen("menu://view-applications", () => setView("applications")),
       listen("menu://view-network", () => setView("network")),
       listen("menu://about", () => setShowAbout(true)),
+      listen("menu://documentation", () => setShowDocumentation(true)),
+      listen("menu://report-issue", () => open(DOCS_ISSUES_URL)),
+      listen("menu://discord", () => open(DISCORD_URL)),
+      listen("menu://sponsor", () => open(DOCS_SPONSOR_URL)),
       listen("menu://settings", () => setShowSettings(true)),
     ]
     return () => {
@@ -456,17 +532,20 @@ function App() {
   const inputDevices = useMemo(() => physicalDevices.filter((d) => d.is_input), [physicalDevices])
   const outputDevices = useMemo(() => physicalDevices.filter((d) => !d.is_input), [physicalDevices])
 
-  const availableSourcesToAdd = useMemo(() => {
-    if (!selectedDevice) return []
-    const used = new Set(selectedDevice.sources.map((s) => s.id))
-    return inputDevices.filter((d) => !used.has(d.name))
-  }, [selectedDevice, inputDevices])
+  const availableSourcesToAdd = useMemo(
+    () => (selectedDevice ? availableInputDevices(selectedDevice, inputDevices) : []),
+    [selectedDevice, inputDevices]
+  )
 
-  const availableMonitorsToAdd = useMemo(() => {
-    if (!selectedDevice) return []
-    const used = new Set(selectedDevice.monitors.map((m) => m.name))
-    return outputDevices.filter((d) => !used.has(d.name))
-  }, [selectedDevice, outputDevices])
+  const availableMonitorsToAdd = useMemo(
+    () => (selectedDevice ? availableMonitorDevices(selectedDevice, outputDevices) : []),
+    [selectedDevice, outputDevices]
+  )
+
+  const availableVirtualDeviceSourcesToAdd = useMemo(
+    () => (selectedDevice ? availableVirtualDeviceSources(selectedDevice, virtualDevices, levels) : []),
+    [selectedDevice, virtualDevices, levels]
+  )
 
   const deviceLevels = selectedId ? levels[selectedId] : undefined
 
@@ -555,7 +634,7 @@ function App() {
               onRemoveDestination={(deviceId, sourceId) => handleRemoveSource(deviceId, sourceId)}
               onGain={(deviceId, sourceId, gain) => handleSourceGain(deviceId, sourceId, gain)}
               onMute={(deviceId, sourceId, muted) => handleSourceMute(deviceId, sourceId, muted)}
-              onCreateDevice={handleCreate}
+              onCreateDevice={() => handleCreate()}
             />
           </main>
         </div>
@@ -597,6 +676,7 @@ function App() {
               onTogglePublish={handleTogglePublished}
               onAddNetworkSource={handleAddNetworkSource}
               onRemoveNetworkSource={handleRemoveSource}
+              onQuickRouteToApp={handleQuickRouteToApp}
             />
           </main>
         </div>
@@ -612,6 +692,15 @@ function App() {
           onDelete={handleDelete}
           onToggleEnabled={handleToggleEnabled}
           onRename={handleRename}
+          inputDevices={inputDevices}
+          outputDevices={outputDevices}
+          appSessions={appSessions}
+          levels={levels}
+          onAddSource={handleAddSource}
+          onAddApplicationSource={handleAddApplicationSource}
+          onAddVirtualDeviceSource={handleAddVirtualDeviceSource}
+          onAddMonitor={handleAddMonitor}
+          onSetOutputChannels={handleSetOutputChannels}
         />
 
         <main className="main">
@@ -665,6 +754,9 @@ function App() {
                 device={selectedDevice}
                 availableSourcesToAdd={availableSourcesToAdd}
                 availableMonitorsToAdd={availableMonitorsToAdd}
+                availableVirtualDeviceSourcesToAdd={availableVirtualDeviceSourcesToAdd}
+                appSessions={appSessions}
+                deviceMeters={deviceMeters}
                 sourceLevels={deviceLevels?.source_levels ?? {}}
                 outputLevels={deviceLevels?.output_levels ?? []}
                 sourceStats={deviceLevels?.source_stats ?? {}}
@@ -672,6 +764,10 @@ function App() {
                 showMonitors={showMonitors}
                 onToggleShowMonitors={() => setShowMonitors((v) => !v)}
                 onAddSource={(sourceId) => handleAddSource(selectedDevice.id, sourceId)}
+                onAddApplicationSource={(session) => handleAddApplicationSource(selectedDevice.id, session)}
+                onAddVirtualDeviceSource={(sourceDeviceId) =>
+                  handleAddVirtualDeviceSource(selectedDevice.id, sourceDeviceId)
+                }
                 onRemoveSource={(sourceId) => handleRemoveSource(selectedDevice.id, sourceId)}
                 onSourceGain={(sourceId, gain) => handleSourceGain(selectedDevice.id, sourceId, gain)}
                 onSourceMute={(sourceId, muted) => handleSourceMute(selectedDevice.id, sourceId, muted)}
@@ -684,7 +780,7 @@ function App() {
                   )
                   handleToggleConnection(selectedDevice.id, sourceId, sourceChannel, outputChannel, already)
                 }}
-                onAddOutputPair={() => handleAddOutputPair(selectedDevice.id, selectedDevice.output_channels)}
+                onSetOutputChannels={(count) => handleSetOutputChannels(selectedDevice.id, count)}
                 onAddMonitor={(name) => handleAddMonitor(selectedDevice.id, name)}
                 onRemoveMonitor={(name) => handleRemoveMonitor(selectedDevice.id, name)}
                 onSetMonitorChannel={(monitorName, monitorChannel, outputChannel) =>
@@ -710,7 +806,7 @@ function App() {
           ) : (
             <div className="empty-state">
               <p>No virtual device selected.</p>
-              <button className="btn btn-primary" onClick={handleCreate}>
+              <button className="btn btn-primary" onClick={() => handleCreate()}>
                 Create your first virtual device
               </button>
             </div>
@@ -721,6 +817,13 @@ function App() {
 
       <footer className="footer">
         <p>YomagAudio &middot; GPL-3.0 License</p>
+        <div className="footer-links">
+          <button onClick={() => setShowDocumentation(true)}>Documentation</button>
+          <button onClick={() => open(DISCORD_URL)}>Discord</button>
+          <button className="footer-sponsor-link" onClick={() => open(DOCS_SPONSOR_URL)}>
+            ❤ Sponsor
+          </button>
+        </div>
       </footer>
 
       {showSettings && (
@@ -747,17 +850,16 @@ function App() {
       )}
 
       {showAbout && (
-        <div className="about-overlay" onClick={() => setShowAbout(false)}>
-          <div className="about-dialog" onClick={(e) => e.stopPropagation()}>
-            <h2>YomagAudio</h2>
-            <p>A transit system for your audio</p>
-            <p className="about-meta">Version 0.1.0 &middot; GPL-3.0 License</p>
-            <button className="btn btn-primary" onClick={() => setShowAbout(false)}>
-              Close
-            </button>
-          </div>
-        </div>
+        <AboutDialog
+          onClose={() => setShowAbout(false)}
+          onOpenDocumentation={() => {
+            setShowAbout(false)
+            setShowDocumentation(true)
+          }}
+        />
       )}
+
+      {showDocumentation && <DocumentationModal onClose={() => setShowDocumentation(false)} />}
     </div>
   )
 }

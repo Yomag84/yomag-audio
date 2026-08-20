@@ -333,40 +333,39 @@
   z-index: 100;
 }
 
-.about-dialog {
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-lg);
-  padding: 26px 30px;
-  text-align: center;
-  min-width: 260px;
-}
-
-.about-dialog h2 {
-  font-size: 18px;
-  font-weight: 700;
-  margin-bottom: 6px;
-}
-
-.about-dialog p {
-  font-size: 13px;
-  color: var(--text-secondary);
-  margin-bottom: 4px;
-}
-
-.about-meta {
-  margin-bottom: 18px !important;
-  font-size: 12px !important;
-  color: var(--text-muted) !important;
-}
-
 .footer {
   padding: 9px;
-  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  flex-wrap: wrap;
   border-top: 1px solid var(--border);
   background: var(--bg-app);
   font-size: 11px;
   color: var(--text-muted);
   flex-shrink: 0;
+}
+
+.footer-links {
+  display: flex;
+  gap: 14px;
+}
+
+.footer-links button {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.footer-links button:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.footer-sponsor-link:hover {
+  color: var(--danger) !important;
 }

@@ -300,6 +300,13 @@ enum SourceStream {
     Loopback(LoopbackCapture),
     ProcessLoopback(ProcessLoopbackCapture),
     Network(NetworkSubscription),
+    /// A source fed by another VirtualDevice's mix (see `Router::
+    /// add_virtual_device_source`). Nothing to hold for RAII here - the
+    /// producer side of this tap lives in the *source* device's
+    /// `monitor_producers` map, keyed by `Router::vdev_tap_key`, and is
+    /// cleaned up explicitly by the Router (on source removal or device
+    /// deletion) rather than by this variant being dropped.
+    VirtualDeviceTap,
 }
 
 // Held only for RAII: dropping either variant stops that monitor's stream.
@@ -524,6 +531,56 @@ impl VirtualDevice {
         if was_enabled {
             self.set_enabled(true, network)?;
         }
+        Ok(())
+    }
+
+    pub fn output_channels(&self) -> usize {
+        self.output_channels
+    }
+
+    /// Registers a producer under `key` in this device's `monitor_producers`
+    /// fan-out - the same map every real monitor's output stream and the
+    /// network publisher already feed from (see `mixer_loop`), so a tap
+    /// registered here starts receiving this device's mix on the very next
+    /// tick with no other wiring needed. Used by `Router::
+    /// add_virtual_device_source` to let one virtual device's mix feed
+    /// another's `SourceEntry` via `add_tap_source` below.
+    pub fn register_tap(&mut self, key: String, producer: HeapProd<f32>) {
+        self.monitor_producers.lock().insert(key, producer);
+    }
+
+    /// Removes a tap producer registered via `register_tap`. A no-op if
+    /// `key` isn't present, so callers can call this defensively during
+    /// cleanup without checking existence first.
+    pub fn unregister_tap(&mut self, key: &str) {
+        self.monitor_producers.lock().remove(key);
+    }
+
+    /// Wires an already-built consumer straight in as a source, without
+    /// opening any stream of its own - used for a virtual-device-to-
+    /// virtual-device tap (see `register_tap`/`Router::
+    /// add_virtual_device_source`), where the audio is already flowing
+    /// through another device's mixer tick rather than a hardware/network
+    /// capture this method would need to start.
+    pub fn add_tap_source(&mut self, source_id: String, channels: usize, consumer: HeapCons<f32>) -> Result<(), String> {
+        if self.sources.lock().contains_key(&source_id) {
+            return Ok(());
+        }
+        self.sources.lock().insert(
+            source_id,
+            SourceEntry {
+                channels,
+                consumer,
+                levels: Arc::new(LevelStore::new(channels)),
+                stats: Arc::new(StatsCounters::new()),
+                gain: 1.0,
+                muted: false,
+                scratch: Vec::new(),
+                peak_scratch: Vec::new(),
+                record_tap: None,
+                _stream: SourceStream::VirtualDeviceTap,
+            },
+        );
         Ok(())
     }
 
@@ -1450,28 +1507,39 @@ fn mixer_loop(
                 entry
                     .stats
                     .set_buffered_frames(entry.consumer.occupied_len() / entry.channels.max(1));
+
+                // Gain is applied here, before metering and the record tap,
+                // so both reflect what a source is actually contributing
+                // right now - previously both read the raw, pre-gain
+                // signal, which made a source you'd turned up to
+                // compensate for a quiet mic still look quiet on its meter
+                // and, worse, still get recorded at its original quiet
+                // level regardless of how far you'd pushed the fader. Mute
+                // deliberately stays a separate, later check (below and in
+                // the routing loop) rather than being folded in here: a
+                // source you mute mid-take is still fully captured and
+                // still shows meter activity, since muting only silences
+                // live monitoring/mix output, not the recording.
+                if entry.gain != 1.0 {
+                    for s in entry.scratch.iter_mut() {
+                        *s *= entry.gain;
+                    }
+                }
+
                 entry
                     .levels
                     .update(&entry.scratch, entry.channels, &mut entry.peak_scratch);
 
-                // Pre-fader, pre-mute tap: a source being recorded still
-                // gets captured while muted, and a gain move mid-take
-                // doesn't touch the file on disk. push_slice is
-                // non-blocking and silently drops on a full ring buffer
-                // (RECORD_RING_SECONDS worth of headroom), so a slow disk
-                // flush can only cost the recording a few dropped samples,
-                // never stall this tick.
+                // push_slice is non-blocking and silently drops on a full
+                // ring buffer (RECORD_RING_SECONDS worth of headroom), so a
+                // slow disk flush can only cost the recording a few
+                // dropped samples, never stall this tick.
                 if let Some(tap) = entry.record_tap.as_mut() {
                     let _ = tap.push_slice(&entry.scratch);
                 }
 
                 if entry.muted {
                     continue;
-                }
-                if entry.gain != 1.0 {
-                    for s in entry.scratch.iter_mut() {
-                        *s *= entry.gain;
-                    }
                 }
             }
 
@@ -1541,6 +1609,27 @@ pub struct DeviceProfile {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Profile {
     pub devices: Vec<DeviceProfile>,
+}
+
+/// Source id prefix for a source fed by another virtual device's mix (see
+/// `Router::add_virtual_device_source`) - parallels `app:`/`net:` as a
+/// source-id namespace, distinguishing it from a physical device name or
+/// the synthetic system-audio pseudo-device.
+const VDEV_SOURCE_PREFIX: &str = "vdev:";
+
+fn vdev_source_id(source_device_id: &str) -> String {
+    format!("{VDEV_SOURCE_PREFIX}{source_device_id}")
+}
+
+fn parse_vdev_source_id(source_id: &str) -> Option<&str> {
+    source_id.strip_prefix(VDEV_SOURCE_PREFIX)
+}
+
+/// Key a target device's tap is registered under in the *source* device's
+/// `monitor_producers` map - namespaced so it can't collide with a real
+/// monitor device name or the network publisher's own reserved key.
+fn vdev_tap_key(target_device_id: &str) -> String {
+    format!("__vdev_tap__:{target_device_id}")
 }
 
 /// Owns every virtual device. Devices are independent mixing buses; the
@@ -1658,10 +1747,141 @@ impl Router {
     }
 
     pub fn delete_device(&mut self, id: &str) {
+        // Clean up any vdev-source taps this device pulled *from* another
+        // device (this device was the tap's target) - those producers live
+        // on the upstream device's `monitor_producers`, keyed by this
+        // device's id, and won't go away just because this device does.
+        if let Some(device) = self.devices.get(id) {
+            let upstream_ids: Vec<String> = device
+                .snapshot()
+                .sources
+                .into_iter()
+                .filter_map(|s| parse_vdev_source_id(&s.id).map(|u| u.to_string()))
+                .collect();
+            let tap_key = vdev_tap_key(id);
+            for upstream_id in upstream_ids {
+                if let Some(upstream) = self.devices.get_mut(&upstream_id) {
+                    upstream.unregister_tap(&tap_key);
+                }
+            }
+        }
+
+        // And any other device that was tapping *this* device as a vdev
+        // source is left with a dead source pointing at nothing once it's
+        // gone - drop it rather than leaving a permanently-silent zombie
+        // source sitting in that device's list.
+        let this_vdev_source_id = vdev_source_id(id);
+        let dependents: Vec<String> = self
+            .order
+            .iter()
+            .filter(|other_id| other_id.as_str() != id)
+            .filter(|other_id| {
+                self.devices
+                    .get(*other_id)
+                    .map(|d| d.snapshot().sources.iter().any(|s| s.id == this_vdev_source_id))
+                    .unwrap_or(false)
+            })
+            .cloned()
+            .collect();
+        for dependent_id in dependents {
+            if let Some(dependent) = self.devices.get_mut(&dependent_id) {
+                dependent.remove_source(&this_vdev_source_id);
+            }
+        }
+
         if let Some(mut device) = self.devices.remove(id) {
             device.shutdown(&self.network);
         }
         self.order.retain(|d| d != id);
+    }
+
+    /// Removes a source from a device, additionally tearing down the
+    /// upstream tap producer if `source_id` is a `vdev:` source - plain
+    /// `VirtualDevice::remove_source` only knows about its own device, not
+    /// the other device whose `monitor_producers` map is feeding it.
+    pub fn remove_device_source(&mut self, device_id: &str, source_id: &str) -> Result<(), String> {
+        if let Some(source_device_id) = parse_vdev_source_id(source_id) {
+            if let Some(source_device) = self.devices.get_mut(source_device_id) {
+                source_device.unregister_tap(&vdev_tap_key(device_id));
+            }
+        }
+        self.with_device_mut(device_id, |d| {
+            d.remove_source(source_id);
+            Ok(())
+        })
+    }
+
+    /// Wires `source_device_id`'s output mix in as a source of
+    /// `target_device_id`, so one virtual device's mix can feed another
+    /// (e.g. combining several sub-mixes into a master device). Both
+    /// devices already run their mixer tick at the same `INTERNAL_SAMPLE_
+    /// RATE`, so this is a plain ring-buffer tap - no resampling needed,
+    /// unlike a monitor's real-hardware-rate output.
+    pub fn add_virtual_device_source(
+        &mut self,
+        target_device_id: &str,
+        source_device_id: &str,
+    ) -> Result<String, String> {
+        if target_device_id == source_device_id {
+            return Err("A virtual device can't be a source of itself".to_string());
+        }
+        if !self.devices.contains_key(target_device_id) {
+            return Err(format!("Unknown device: {target_device_id}"));
+        }
+        let source_channels = self
+            .devices
+            .get(source_device_id)
+            .ok_or_else(|| format!("Unknown device: {source_device_id}"))?
+            .output_channels();
+
+        if self.would_create_cycle(target_device_id, source_device_id) {
+            return Err(
+                "Adding this would create a routing loop between virtual devices".to_string(),
+            );
+        }
+
+        let ring = HeapRb::<f32>::new(INTERNAL_SAMPLE_RATE as usize * source_channels.max(1));
+        let (producer, consumer) = ring.split();
+
+        self.devices
+            .get_mut(source_device_id)
+            .expect("checked above")
+            .register_tap(vdev_tap_key(target_device_id), producer);
+
+        let source_id = vdev_source_id(source_device_id);
+        self.devices
+            .get_mut(target_device_id)
+            .expect("checked above")
+            .add_tap_source(source_id.clone(), source_channels, consumer)?;
+
+        Ok(source_id)
+    }
+
+    /// True if wiring `candidate_source_id` in as a source of
+    /// `target_device_id` would close a loop - i.e. `target_device_id` is
+    /// already reachable from `candidate_source_id` by following existing
+    /// vdev-source edges. Walks the existing vdev-source graph rather than
+    /// just checking direct sourcing, since a 3+ device loop (A <- B <- C
+    /// <- A) is just as real a problem as a direct one.
+    fn would_create_cycle(&self, target_device_id: &str, candidate_source_id: &str) -> bool {
+        let mut stack = vec![candidate_source_id.to_string()];
+        let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
+        while let Some(current) = stack.pop() {
+            if current == target_device_id {
+                return true;
+            }
+            if !visited.insert(current.clone()) {
+                continue;
+            }
+            if let Some(device) = self.devices.get(&current) {
+                for source in device.snapshot().sources {
+                    if let Some(upstream) = parse_vdev_source_id(&source.id) {
+                        stack.push(upstream.to_string());
+                    }
+                }
+            }
+        }
+        false
     }
 
     pub fn rename_device(&mut self, id: &str, name: String) -> Result<(), String> {
@@ -1783,6 +2003,80 @@ impl Default for Router {
 #[cfg(test)]
 mod tests {
     use std::time::Instant;
+
+    /// A device-to-device tap (see `Router::add_virtual_device_source`)
+    /// wires a producer into the source device and a consumer into the
+    /// target device without opening any real audio stream, so this can
+    /// run as a plain unit test - no hardware, no `#[ignore]` needed,
+    /// unlike the physical-source tests below.
+    #[test]
+    fn add_virtual_device_source_wires_a_tap_and_rejects_cycles() {
+        use super::Router;
+
+        let mut router = Router::new();
+        let a = router.create_device("A".to_string());
+        let b = router.create_device("B".to_string());
+        let c = router.create_device("C".to_string());
+
+        // A <- B: B's mix feeds into A as a source.
+        let source_id = router
+            .add_virtual_device_source(&a, &b)
+            .expect("A sourcing from B should succeed");
+        assert_eq!(source_id, super::vdev_source_id(&b));
+        let a_sources = router.devices.get(&a).unwrap().snapshot().sources;
+        assert!(a_sources.iter().any(|s| s.id == source_id));
+
+        // Re-adding the same edge is a harmless no-op (mirrors add_source).
+        assert!(router.add_virtual_device_source(&a, &b).is_ok());
+
+        // B <- C: extends the chain to C -> B -> A.
+        router
+            .add_virtual_device_source(&b, &c)
+            .expect("B sourcing from C should succeed");
+
+        // A device can't source from itself.
+        assert!(router.add_virtual_device_source(&a, &a).is_err());
+
+        // Direct cycle: B already feeds A, so A feeding B would loop.
+        assert!(router.add_virtual_device_source(&b, &a).is_err());
+
+        // Transitive cycle: C already feeds B (which feeds A), so A
+        // feeding C would close a 3-device loop (A -> B -> C -> A).
+        assert!(router.add_virtual_device_source(&c, &a).is_err());
+
+        // Removing the A<-B source also tears down the tap producer B
+        // registered on... itself as the source side (B's own
+        // monitor_producers), so B no longer thinks anything is tapping it.
+        router.remove_device_source(&a, &source_id).unwrap();
+        assert!(router.devices.get(&b).unwrap().monitor_producers.lock().is_empty());
+        let a_sources_after = router.devices.get(&a).unwrap().snapshot().sources;
+        assert!(!a_sources_after.iter().any(|s| s.id == source_id));
+    }
+
+    /// Deleting a device that's mid-chain (B, with A <- B <- C) must clean
+    /// up both directions: A's now-dead `vdev:B` source, and the tap B had
+    /// registered on C.
+    #[test]
+    fn deleting_a_device_cleans_up_both_directions_of_its_vdev_taps() {
+        use super::Router;
+
+        let mut router = Router::new();
+        let a = router.create_device("A".to_string());
+        let b = router.create_device("B".to_string());
+        let c = router.create_device("C".to_string());
+
+        router.add_virtual_device_source(&a, &b).unwrap();
+        router.add_virtual_device_source(&b, &c).unwrap();
+
+        router.delete_device(&b);
+
+        // A's source pointing at B is gone, not left dangling.
+        let a_sources = router.devices.get(&a).unwrap().snapshot().sources;
+        assert!(a_sources.is_empty(), "A should have no sources left after B was deleted, got {a_sources:?}");
+
+        // C no longer has a tap producer feeding a now-nonexistent B.
+        assert!(router.devices.get(&c).unwrap().monitor_producers.lock().is_empty());
+    }
 
     /// Measures the actual per-tick hot path used by mixer_loop: routing N
     /// sources' worth of samples through a connection matrix into an

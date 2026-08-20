@@ -63,6 +63,7 @@ export interface AppAudioSession {
   display_name: string
   volume: number
   muted: boolean
+  level: number
 }
 
 export interface PeerDeviceInfo {
@@ -137,9 +138,27 @@ export interface TrackProject {
   solo: boolean
   eq_bands: EqBand[]
   clips: Clip[]
+  /** Send level (0-1) to each EffectReturn, keyed by its id. */
+  sends: Record<string, number>
+}
+
+/** A shared send/return bus every track can send a portion of its signal
+ * into - see src-tauri/src/audio/recording.rs's EffectReturn doc for the
+ * "aux return" mixing model this implements. Delay is the only effect type
+ * today. */
+export interface EffectReturn {
+  id: string
+  name: string
+  enabled: boolean
+  delay_ms: number
+  feedback: number
+  mix: number
 }
 
 export interface RecordingProject {
   session_id: string
   tracks: TrackProject[]
+  effect_returns: EffectReturn[]
+  /** Editor-only metronome tempo; never affects render_mixdown. */
+  tempo_bpm: number
 }

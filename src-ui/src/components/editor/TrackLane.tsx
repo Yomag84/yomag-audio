@@ -9,6 +9,7 @@ interface TrackLaneProps {
   track: TrackProject
   peaks: PeakData
   sourceDurationFrames: number
+  timelineDurationFrames: number
   sampleRate: number
   pixelsPerSecond: number
   playheadFrame: number
@@ -23,6 +24,8 @@ interface TrackLaneProps {
   onSplit: () => void
   onDeleteSelectedClip: () => void
   onOpenFx: () => void
+  onExportTrack: () => void
+  exporting: boolean
 }
 
 export function TrackLane({
@@ -31,6 +34,7 @@ export function TrackLane({
   track,
   peaks,
   sourceDurationFrames,
+  timelineDurationFrames,
   sampleRate,
   pixelsPerSecond,
   playheadFrame,
@@ -45,6 +49,8 @@ export function TrackLane({
   onSplit,
   onDeleteSelectedClip,
   onOpenFx,
+  onExportTrack,
+  exporting,
 }: TrackLaneProps) {
   const hasSelectedClip = track.clips.some((c) => c.id === selectedClipId)
 
@@ -94,12 +100,21 @@ export function TrackLane({
           >
             Delete
           </button>
+          <button
+            className="track-action-btn"
+            onClick={onExportTrack}
+            disabled={exporting}
+            title="Save this track's own edit list (clips, gain, pan, EQ) to its own WAV file"
+          >
+            {exporting ? "Saving…" : "Save Track"}
+          </button>
         </div>
       </div>
       <ClipCanvas
         clips={track.clips}
         peaks={peaks}
         sourceDurationFrames={sourceDurationFrames}
+        timelineDurationFrames={timelineDurationFrames}
         sampleRate={sampleRate}
         pixelsPerSecond={pixelsPerSecond}
         playheadFrame={playheadFrame}

@@ -28,7 +28,8 @@
   gap: 6px;
 }
 
-.network-add-row input {
+.network-add-row input,
+.network-add-row select {
   flex: 1;
   padding: 7px 9px;
   background: var(--bg-surface-alt);
@@ -41,6 +42,29 @@
 .network-hint {
   font-size: 11px;
   color: var(--text-muted);
+}
+
+.quick-route-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.quick-route-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.quick-route-item .btn {
+  width: 100%;
+  font-size: 12px;
+}
+
+.quick-route-hint {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  line-height: 1.4;
 }
 
 .network-list {

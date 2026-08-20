@@ -17,6 +17,7 @@ use ringbuf::HeapProd;
 use serde::Serialize;
 use windows::core::{implement, Interface, PWSTR};
 use windows::Win32::Foundation::CloseHandle;
+use windows::Win32::Media::Audio::Endpoints::IAudioMeterInformation;
 use windows::Win32::Media::Audio::{
     eConsole, eRender, ActivateAudioInterfaceAsync, AudioSessionStateExpired,
     IActivateAudioInterfaceAsyncOperation, IActivateAudioInterfaceCompletionHandler,
@@ -68,6 +69,12 @@ pub struct AppAudioSession {
     pub display_name: String,
     pub volume: f32,
     pub muted: bool,
+    /// Live peak level (0.0-1.0), read via `IAudioMeterInformation` on this
+    /// same session - see `list_input_device_meters` in device_manager.rs
+    /// for why that interface needs no capture stream of its own. 0.0 if
+    /// the session doesn't expose a meter for some reason, which just
+    /// shows as an empty meter rather than failing enumeration.
+    pub level: f32,
 }
 
 /// Enumerates every process currently holding a non-expired audio session on
@@ -144,6 +151,10 @@ unsafe fn list_app_sessions_inner() -> Result<Vec<AppAudioSession>, String> {
             ),
             Err(_) => (1.0, false),
         };
+        let level = control
+            .cast::<IAudioMeterInformation>()
+            .and_then(|m| m.GetPeakValue())
+            .unwrap_or(0.0);
 
         by_pid.insert(
             pid,
@@ -153,6 +164,7 @@ unsafe fn list_app_sessions_inner() -> Result<Vec<AppAudioSession>, String> {
                 display_name,
                 volume,
                 muted,
+                level,
             },
         );
     }

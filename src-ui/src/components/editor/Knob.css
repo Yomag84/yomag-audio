@@ -9,8 +9,9 @@
   width: 34px;
   height: 34px;
   border-radius: 50%;
-  background: var(--bg-surface-sunken);
+  background: radial-gradient(circle at 35% 30%, #55555e 0%, #2a2a2e 55%, #17171a 100%);
   border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm), inset 0 1px 1px rgba(255, 255, 255, 0.15);
   position: relative;
   cursor: ns-resize;
   touch-action: none;
@@ -19,11 +20,12 @@
 
 .knob-dial {
   position: absolute;
-  inset: 3px;
+  inset: 5px;
   border-radius: 50%;
   border: 2px solid;
   display: flex;
   justify-content: center;
+  background: radial-gradient(circle at 40% 35%, rgba(255, 255, 255, 0.12), transparent 60%);
 }
 
 .knob-pointer {
@@ -31,6 +33,7 @@
   height: 42%;
   margin-top: 2px;
   border-radius: 1px;
+  box-shadow: 0 0 3px currentColor;
 }
 
 .knob-label {

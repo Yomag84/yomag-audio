@@ -126,10 +126,33 @@ pub fn remove_device_source(
     source_id: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
-    state.router.write().with_device_mut(&device_id, |d| {
-        d.remove_source(&source_id);
-        Ok(())
-    })
+    state.router.write().remove_device_source(&device_id, &source_id)
+}
+
+/// Wires another virtual device's mix in as a source of this one - see
+/// `Router::add_virtual_device_source` for the routing-loop guard this
+/// goes through.
+#[tauri::command]
+pub fn add_virtual_device_source(
+    device_id: String,
+    source_device_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<String, String> {
+    state
+        .router
+        .write()
+        .add_virtual_device_source(&device_id, &source_device_id)
+}
+
+/// Live peak level (0.0-1.0) per input device, for the "Add Source" browser
+/// - read via WASAPI's `IAudioMeterInformation`, which reports a device's
+/// current peak without opening a capture stream of our own (the same
+/// lightweight mechanism Windows' own Volume Mixer uses for its meters), so
+/// this can be polled while browsing without competing with the real audio
+/// pipeline.
+#[tauri::command]
+pub fn list_device_meters() -> std::collections::HashMap<String, f32> {
+    crate::audio::device_manager::list_input_device_meters()
 }
 
 #[tauri::command]

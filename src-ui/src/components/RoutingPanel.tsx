@@ -1,13 +1,25 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react"
-import type { CSSProperties } from "react"
 import type { AudioDeviceInfo, Connection, EqBand, StreamStats, VirtualDeviceSnapshot } from "../types"
 import { MonitorSettingsPanel } from "./MonitorSettingsPanel"
+import { SourcePicker, type VirtualDeviceSourceOption } from "./SourcePicker"
+import { ContextMenu, useContextMenu, type ContextMenuEntry } from "./ContextMenu"
+import type { AppAudioSession } from "../types"
+import { meterFillStyle } from "../lib/meter"
+import {
+  buildAddMonitorSubmenu,
+  buildAddSourceSubmenu,
+  buildOutputChannelSubmenu,
+  OUTPUT_CHANNEL_PRESETS,
+} from "../lib/deviceContextMenu"
 import "./RoutingPanel.css"
 
 interface RoutingPanelProps {
   device: VirtualDeviceSnapshot
   availableSourcesToAdd: AudioDeviceInfo[]
   availableMonitorsToAdd: AudioDeviceInfo[]
+  availableVirtualDeviceSourcesToAdd: VirtualDeviceSourceOption[]
+  appSessions: AppAudioSession[]
+  deviceMeters: Record<string, number>
   sourceLevels: Record<string, number[]>
   outputLevels: number[]
   sourceStats: Record<string, StreamStats>
@@ -15,11 +27,13 @@ interface RoutingPanelProps {
   showMonitors: boolean
   onToggleShowMonitors: () => void
   onAddSource: (sourceId: string) => void
+  onAddApplicationSource: (session: AppAudioSession) => void
+  onAddVirtualDeviceSource: (sourceDeviceId: string) => void
   onRemoveSource: (sourceId: string) => void
   onSourceGain: (sourceId: string, gain: number) => void
   onSourceMute: (sourceId: string, muted: boolean) => void
   onToggleConnection: (sourceId: string, sourceChannel: number, outputChannel: number) => void
-  onAddOutputPair: () => void
+  onSetOutputChannels: (count: number) => void
   onAddMonitor: (monitorName: string) => void
   onRemoveMonitor: (monitorName: string) => void
   onSetMonitorChannel: (monitorName: string, monitorChannel: number, outputChannel: number) => void
@@ -33,17 +47,6 @@ interface RoutingPanelProps {
 type PendingSelection =
   | { kind: "source"; sourceId: string; channel: number }
   | { kind: "output"; channel: number }
-
-function levelToWidth(peak: number | undefined): number {
-  const v = peak ?? 0
-  const db = v > 0 ? 20 * Math.log10(v) : -60
-  const clamped = Math.max(-60, Math.min(0, db))
-  return ((clamped + 60) / 60) * 100
-}
-
-function meterFillStyle(peak: number | undefined): CSSProperties {
-  return { transform: `scaleX(${levelToWidth(peak) / 100})` }
-}
 
 function channelLabel(index: number): string {
   if (index === 0) return "L"
@@ -68,6 +71,9 @@ export function RoutingPanel({
   device,
   availableSourcesToAdd,
   availableMonitorsToAdd,
+  availableVirtualDeviceSourcesToAdd,
+  appSessions,
+  deviceMeters,
   sourceLevels,
   outputLevels,
   sourceStats,
@@ -75,11 +81,13 @@ export function RoutingPanel({
   showMonitors,
   onToggleShowMonitors,
   onAddSource,
+  onAddApplicationSource,
+  onAddVirtualDeviceSource,
   onRemoveSource,
   onSourceGain,
   onSourceMute,
   onToggleConnection,
-  onAddOutputPair,
+  onSetOutputChannels,
   onAddMonitor,
   onRemoveMonitor,
   onSetMonitorChannel,
@@ -90,7 +98,6 @@ export function RoutingPanel({
   onSetMonitorEq,
 }: RoutingPanelProps) {
   const [pending, setPending] = useState<PendingSelection | null>(null)
-  const [sourceToAdd, setSourceToAdd] = useState("")
   const [monitorToAdd, setMonitorToAdd] = useState("")
   const [paths, setPaths] = useState<{ key: string; d: string }[]>([])
   // Exclusive mode + buffer/delay/EQ are advanced, rarely-touched settings -
@@ -211,9 +218,36 @@ export function RoutingPanel({
     }
   }
 
+  const { menu, open: openContextMenu, close: closeContextMenu } = useContextMenu()
+
+  const generalMenuItems = (): ContextMenuEntry[] => [
+    {
+      label: "Add Source",
+      submenu: buildAddSourceSubmenu({
+        devices: availableSourcesToAdd,
+        appSessions,
+        virtualDevices: availableVirtualDeviceSourcesToAdd,
+        onAddDevice: onAddSource,
+        onAddApplication: onAddApplicationSource,
+        onAddVirtualDevice: onAddVirtualDeviceSource,
+      }),
+    },
+    {
+      label: "Set Output Channels",
+      submenu: buildOutputChannelSubmenu(device.output_channels, onSetOutputChannels),
+    },
+    {
+      label: "Add Monitor",
+      submenu: buildAddMonitorSubmenu(availableMonitorsToAdd, onAddMonitor),
+    },
+    { type: "separator" },
+    { label: showMonitors ? "Hide Monitors" : "Show Monitors", onSelect: onToggleShowMonitors },
+  ]
+
   return (
     <div className="routing-panel">
-      <div className="routing-columns" ref={containerRef}>
+      <ContextMenu menu={menu} onClose={closeContextMenu} />
+      <div className="routing-columns" ref={containerRef} onContextMenu={(e) => openContextMenu(e, generalMenuItems())}>
         <svg className="cable-svg">
           {paths.map((p) => (
             <path key={p.key} d={p.d} className="cable-path" />
@@ -226,31 +260,33 @@ export function RoutingPanel({
               <h3>Sources</h3>
               <span className="routing-column-subtitle">{device.sources.length} sources</span>
             </div>
-            <div className="add-control">
-              <select value={sourceToAdd} onChange={(e) => setSourceToAdd(e.target.value)}>
-                <option value="">Add source…</option>
-                {availableSourcesToAdd.map((d) => (
-                  <option key={d.name} value={d.name}>
-                    {d.name}
-                  </option>
-                ))}
-              </select>
-              <button
-                className="btn-icon"
-                disabled={!sourceToAdd}
-                onClick={() => {
-                  onAddSource(sourceToAdd)
-                  setSourceToAdd("")
-                }}
-              >
-                +
-              </button>
-            </div>
+            <SourcePicker
+              devices={availableSourcesToAdd}
+              deviceMeters={deviceMeters}
+              appSessions={appSessions}
+              virtualDevices={availableVirtualDeviceSourcesToAdd}
+              onAddDevice={onAddSource}
+              onAddApplication={onAddApplicationSource}
+              onAddVirtualDevice={onAddVirtualDeviceSource}
+            />
           </div>
 
           <div className="routing-card-list">
             {device.sources.map((source) => (
-              <div key={source.id} className="routing-card">
+              <div
+                key={source.id}
+                className="routing-card"
+                onContextMenu={(e) =>
+                  openContextMenu(e, [
+                    {
+                      label: source.muted ? "Unmute Source" : "Mute Source",
+                      onSelect: () => onSourceMute(source.id, !source.muted),
+                    },
+                    { type: "separator" },
+                    { label: "Remove Source", danger: true, onSelect: () => onRemoveSource(source.id) },
+                  ])
+                }
+              >
                 <div className="routing-card-header">
                   <span className="routing-card-name" title={source.id}>
                     {source.id}
@@ -314,14 +350,34 @@ export function RoutingPanel({
               <h3>Output Channels</h3>
               <span className="routing-column-subtitle">{device.output_channels} channels</span>
             </div>
-            <button className="btn-icon" onClick={onAddOutputPair} title="Add a channel pair">
-              +
-            </button>
+            <div className="channel-preset-group" role="group" aria-label="Set output channel count">
+              {OUTPUT_CHANNEL_PRESETS.map((count) => (
+                <button
+                  key={count}
+                  className={`btn-preset ${device.output_channels === count ? "active" : ""}`}
+                  onClick={() => onSetOutputChannels(count)}
+                  title={`Set this device to ${count} output channels`}
+                >
+                  {count}
+                </button>
+              ))}
+            </div>
           </div>
 
           <div className="routing-card-list">
             {outputChannelPairs.map((pair, i) => (
-              <div key={i} className="routing-card">
+              <div
+                key={i}
+                className="routing-card"
+                onContextMenu={(e) =>
+                  openContextMenu(e, [
+                    {
+                      label: "Set Output Channels",
+                      submenu: buildOutputChannelSubmenu(device.output_channels, onSetOutputChannels),
+                    },
+                  ])
+                }
+              >
                 <div className="routing-card-header">
                   <span className="routing-card-name">
                     {pair.length === 2 ? `Channels ${pair[0] + 1} & ${pair[1] + 1}` : `Channel ${pair[0] + 1}`}
@@ -400,7 +456,20 @@ export function RoutingPanel({
               {device.monitors.map((monitor) => {
                 const isAdvancedOpen = expandedMonitors.has(monitor.name)
                 return (
-                <div key={monitor.name} className="routing-card">
+                <div
+                  key={monitor.name}
+                  className="routing-card"
+                  onContextMenu={(e) =>
+                    openContextMenu(e, [
+                      {
+                        label: monitor.exclusive ? "Disable Exclusive Mode" : "Enable Exclusive Mode",
+                        onSelect: () => onSetMonitorExclusive(monitor.name, !monitor.exclusive),
+                      },
+                      { type: "separator" },
+                      { label: "Remove Monitor", danger: true, onSelect: () => onRemoveMonitor(monitor.name) },
+                    ])
+                  }
+                >
                   <div className="routing-card-header">
                     <span className="routing-card-name" title={monitor.name}>
                       {monitor.name}

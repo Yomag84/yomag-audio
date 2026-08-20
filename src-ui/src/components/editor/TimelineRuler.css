@@ -1,0 +1,46 @@
+.timeline-ruler {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  height: 26px;
+  background: var(--bg-surface-alt);
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.timeline-ruler-tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  pointer-events: none;
+}
+
+.timeline-ruler-tick-line {
+  width: 1px;
+  height: 7px;
+  background: var(--border-strong);
+  margin-top: 0;
+}
+
+.timeline-ruler-tick-label {
+  margin-top: 2px;
+  margin-left: 3px;
+  font-size: 9.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.timeline-ruler-playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--danger);
+  box-shadow: 0 0 4px var(--danger);
+  pointer-events: none;
+}

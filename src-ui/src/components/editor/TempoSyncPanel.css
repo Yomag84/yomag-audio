@@ -1,0 +1,57 @@
+.tempo-sync-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 150px;
+}
+
+.tempo-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.tempo-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.tempo-input {
+  width: 52px;
+  padding: 4px 6px;
+  background: var(--bg-surface-sunken);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.tempo-unit {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.tempo-metronome-toggle {
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-surface-alt);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  margin-bottom: 6px;
+}
+
+.tempo-metronome-toggle.active {
+  background: var(--accent2-soft);
+  border-color: var(--accent2);
+  color: var(--accent2-strong);
+}
+
+.tempo-hint {
+  font-size: 9.5px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}

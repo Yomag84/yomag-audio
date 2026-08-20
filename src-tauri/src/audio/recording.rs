@@ -24,6 +24,7 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use super::delay::FeedbackDelay;
 use super::engine::{soft_limit, INTERNAL_SAMPLE_RATE};
 use super::eq::{EqBand, MultibandEq};
 
@@ -388,12 +389,46 @@ pub struct TrackProject {
     pub solo: bool,
     pub eq_bands: Vec<EqBand>,
     pub clips: Vec<Clip>,
+    /// Send level (0.0-1.0) to each `EffectReturn`, keyed by its `id`. A
+    /// missing entry means "no send", same as 0.0 - `#[serde(default)]` so
+    /// a `project.json` saved before Effect Returns existed still loads.
+    #[serde(default)]
+    pub sends: HashMap<String, f32>,
+}
+
+/// A shared send/return bus: every track can send a portion of its
+/// (post-gain, post-EQ) signal into one of these, which applies its own
+/// effect once and sums the result back into the master mix - the same
+/// "aux return" mixing model a hardware console uses, rather than each
+/// track running its own private copy of the effect. `FeedbackDelay` is the
+/// only effect type today; more could be added the same way EqBand's
+/// `MultibandEq` was.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EffectReturn {
+    pub id: String,
+    pub name: String,
+    pub enabled: bool,
+    pub delay_ms: f32,
+    pub feedback: f32,
+    pub mix: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecordingProject {
     pub session_id: String,
     pub tracks: Vec<TrackProject>,
+    #[serde(default)]
+    pub effect_returns: Vec<EffectReturn>,
+    /// Editor-only metronome tempo - never affects `render_mixdown` (a
+    /// click track is a monitoring aid, not something that belongs baked
+    /// into an export), so this only ever matters to the frontend's live
+    /// preview. Defaults to 120 for a project saved before tempo existed.
+    #[serde(default = "default_tempo_bpm")]
+    pub tempo_bpm: f32,
+}
+
+fn default_tempo_bpm() -> f32 {
+    120.0
 }
 
 /// Loads a session's saved edits, or - if the editor has never been
@@ -426,9 +461,15 @@ pub fn load_project(base_dir: &Path, session_id: &str) -> Result<RecordingProjec
                 length_frames: t.duration_frames,
                 timeline_start_frame: 0,
             }],
+            sends: HashMap::new(),
         })
         .collect();
-    Ok(RecordingProject { session_id: session_id.to_string(), tracks })
+    Ok(RecordingProject {
+        session_id: session_id.to_string(),
+        tracks,
+        effect_returns: Vec::new(),
+        tempo_bpm: default_tempo_bpm(),
+    })
 }
 
 pub fn save_project(base_dir: &Path, session_id: &str, project: &RecordingProject) -> Result<(), String> {
@@ -457,11 +498,13 @@ fn sanitize_filename(raw: &str) -> String {
 }
 
 /// Picks a non-colliding "<base>.wav" / "<base> (1).wav" / ... filename
-/// inside `dir` for a requested output name.
-fn unique_output_name(dir: &Path, requested: &str) -> String {
+/// inside `dir` for a requested output name, falling back to
+/// `fallback_base` (e.g. "mixdown", or a track's own id) if `requested`
+/// sanitizes down to nothing.
+fn unique_output_name(dir: &Path, requested: &str, fallback_base: &str) -> String {
     let sanitized = sanitize_filename(requested.trim());
     let base = if sanitized.is_empty() {
-        "mixdown".to_string()
+        fallback_base.to_string()
     } else {
         sanitized.strip_suffix(".wav").unwrap_or(&sanitized).to_string()
     };
@@ -473,6 +516,86 @@ fn unique_output_name(dir: &Path, requested: &str) -> String {
         i += 1;
     }
     candidate
+}
+
+/// Assembles one track's clips onto a `timeline_frames`-long buffer and
+/// applies its pan/gain/EQ - the per-track processing shared by
+/// `render_mixdown` (which sums every track's buffer together, plus Effect
+/// Return sends) and `render_track` (which writes just one track's buffer
+/// straight to disk as a single-stem export).
+fn render_track_buffer(
+    track: &TrackProject,
+    track_manifest: &TrackManifest,
+    session_dir: &Path,
+    timeline_frames: usize,
+) -> Result<Vec<f32>, String> {
+    let wav_path = session_dir.join(&track_manifest.file);
+    let mut reader = hound::WavReader::open(&wav_path).map_err(|e| e.to_string())?;
+    let source_channels = track_manifest.channels.max(1);
+    let source_samples: Vec<f32> = reader
+        .samples::<f32>()
+        .collect::<Result<Vec<f32>, _>>()
+        .map_err(|e| e.to_string())?;
+    let source_frames = source_samples.len() / source_channels;
+
+    // Simple balance-style pan law: moving right attenuates the left
+    // channel (and vice versa) rather than boosting the far side, the
+    // same behavior every plain stereo balance control uses.
+    let pan = track.pan.clamp(-1.0, 1.0);
+    let pan_left_gain = if pan > 0.0 { 1.0 - pan } else { 1.0 };
+    let pan_right_gain = if pan < 0.0 { 1.0 + pan } else { 1.0 };
+
+    let mut track_buf = vec![0f32; timeline_frames * MASTER_CHANNELS];
+    for clip in &track.clips {
+        let clip_start = clip.source_start_frame as usize;
+        if clip_start >= source_frames {
+            continue;
+        }
+        let available = source_frames - clip_start;
+        let length = (clip.length_frames as usize).min(available);
+        let dest_start = clip.timeline_start_frame as usize;
+
+        for frame in 0..length {
+            let dest_frame = dest_start + frame;
+            if dest_frame >= timeline_frames {
+                break;
+            }
+            let src_frame = clip_start + frame;
+            let l = source_samples[src_frame * source_channels];
+            let r = if source_channels > 1 {
+                source_samples[src_frame * source_channels + 1]
+            } else {
+                l
+            };
+            track_buf[dest_frame * MASTER_CHANNELS] += l * pan_left_gain;
+            track_buf[dest_frame * MASTER_CHANNELS + 1] += r * pan_right_gain;
+        }
+    }
+
+    if track.gain != 1.0 {
+        for s in track_buf.iter_mut() {
+            *s *= track.gain;
+        }
+    }
+    if !track.eq_bands.is_empty() {
+        MultibandEq::new().process(&mut track_buf, MASTER_CHANNELS, INTERNAL_SAMPLE_RATE, &track.eq_bands);
+    }
+
+    Ok(track_buf)
+}
+
+/// The shared arrangement length (in frames) every track's buffer and the
+/// final master buffer are sized to - the latest point any track's clip
+/// extends to on the timeline.
+fn compute_timeline_frames(project: &RecordingProject) -> Result<usize, String> {
+    project
+        .tracks
+        .iter()
+        .flat_map(|t| t.clips.iter())
+        .map(|c| c.timeline_start_frame + c.length_frames)
+        .max()
+        .map(|f| f as usize)
+        .ok_or_else(|| "Project has no clips to render".to_string())
 }
 
 /// Renders a `RecordingProject`'s edit list down to one destructive
@@ -494,16 +617,14 @@ pub fn render_mixdown(
     let manifest: RecordingManifest = serde_json::from_str(&manifest_json).map_err(|e| e.to_string())?;
 
     let any_solo = project.tracks.iter().any(|t| t.solo);
-
-    let timeline_frames = project
-        .tracks
-        .iter()
-        .flat_map(|t| t.clips.iter())
-        .map(|c| c.timeline_start_frame + c.length_frames)
-        .max()
-        .ok_or_else(|| "Project has no clips to render".to_string())? as usize;
+    let timeline_frames = compute_timeline_frames(project)?;
 
     let mut master = vec![0f32; timeline_frames * MASTER_CHANNELS];
+    let mut return_buses: HashMap<String, Vec<f32>> = project
+        .effect_returns
+        .iter()
+        .map(|r| (r.id.clone(), vec![0f32; timeline_frames * MASTER_CHANNELS]))
+        .collect();
 
     for track in &project.tracks {
         if track.muted || (any_solo && !track.solo) {
@@ -515,60 +636,41 @@ pub fn render_mixdown(
             continue;
         };
 
-        let wav_path = dir.join(&track_manifest.file);
-        let mut reader = hound::WavReader::open(&wav_path).map_err(|e| e.to_string())?;
-        let source_channels = track_manifest.channels.max(1);
-        let source_samples: Vec<f32> = reader
-            .samples::<f32>()
-            .collect::<Result<Vec<f32>, _>>()
-            .map_err(|e| e.to_string())?;
-        let source_frames = source_samples.len() / source_channels;
+        let track_buf = render_track_buffer(track, track_manifest, &dir, timeline_frames)?;
 
-        // Simple balance-style pan law: moving right attenuates the left
-        // channel (and vice versa) rather than boosting the far side, the
-        // same behavior every plain stereo balance control uses.
-        let pan = track.pan.clamp(-1.0, 1.0);
-        let pan_left_gain = if pan > 0.0 { 1.0 - pan } else { 1.0 };
-        let pan_right_gain = if pan < 0.0 { 1.0 + pan } else { 1.0 };
-
-        let mut track_buf = vec![0f32; timeline_frames * MASTER_CHANNELS];
-        for clip in &track.clips {
-            let clip_start = clip.source_start_frame as usize;
-            if clip_start >= source_frames {
+        // Feed this track's post-gain, post-EQ signal into every return bus
+        // it sends to, same source `track_buf` the dry sum below uses -
+        // a return is an *additional* copy of the signal routed through a
+        // shared effect, not a replacement for the track's own dry path.
+        for (return_id, &send_amount) in &track.sends {
+            if send_amount <= 0.0 {
                 continue;
             }
-            let available = source_frames - clip_start;
-            let length = (clip.length_frames as usize).min(available);
-            let dest_start = clip.timeline_start_frame as usize;
-
-            for frame in 0..length {
-                let dest_frame = dest_start + frame;
-                if dest_frame >= timeline_frames {
-                    break;
+            if let Some(bus) = return_buses.get_mut(return_id) {
+                for (b, t) in bus.iter_mut().zip(track_buf.iter()) {
+                    *b += t * send_amount;
                 }
-                let src_frame = clip_start + frame;
-                let l = source_samples[src_frame * source_channels];
-                let r = if source_channels > 1 {
-                    source_samples[src_frame * source_channels + 1]
-                } else {
-                    l
-                };
-                track_buf[dest_frame * MASTER_CHANNELS] += l * pan_left_gain;
-                track_buf[dest_frame * MASTER_CHANNELS + 1] += r * pan_right_gain;
             }
-        }
-
-        if track.gain != 1.0 {
-            for s in track_buf.iter_mut() {
-                *s *= track.gain;
-            }
-        }
-        if !track.eq_bands.is_empty() {
-            MultibandEq::new().process(&mut track_buf, MASTER_CHANNELS, INTERNAL_SAMPLE_RATE, &track.eq_bands);
         }
 
         for (m, t) in master.iter_mut().zip(track_buf.iter()) {
             *m += t;
+        }
+    }
+
+    for effect_return in &project.effect_returns {
+        if !effect_return.enabled {
+            continue;
+        }
+        let Some(bus) = return_buses.get_mut(&effect_return.id) else { continue };
+        let delay = FeedbackDelay {
+            delay_ms: effect_return.delay_ms,
+            feedback: effect_return.feedback,
+            mix: effect_return.mix,
+        };
+        delay.process(bus, MASTER_CHANNELS, INTERNAL_SAMPLE_RATE);
+        for (m, b) in master.iter_mut().zip(bus.iter()) {
+            *m += b;
         }
     }
 
@@ -578,7 +680,7 @@ pub fn render_mixdown(
 
     let mixdown_dir = dir.join("mixdown");
     std::fs::create_dir_all(&mixdown_dir).map_err(|e| e.to_string())?;
-    let output_file_name = unique_output_name(&mixdown_dir, output_name);
+    let output_file_name = unique_output_name(&mixdown_dir, output_name, "mixdown");
     let output_path = mixdown_dir.join(&output_file_name);
 
     let spec = hound::WavSpec {
@@ -589,6 +691,67 @@ pub fn render_mixdown(
     };
     let mut writer = hound::WavWriter::create(&output_path, spec).map_err(|e| e.to_string())?;
     for sample in &master {
+        writer.write_sample(*sample).map_err(|e| e.to_string())?;
+    }
+    writer.finalize().map_err(|e| e.to_string())?;
+
+    Ok(output_file_name)
+}
+
+/// Renders one track's own edit list - clips, gain, pan, EQ, the same
+/// per-track processing `render_mixdown` applies before summing everything
+/// together - to its own WAV under `<session>/mixdown/`, for pulling a
+/// single clean stem out without the rest of the mix.
+///
+/// Deliberately ignores mute/solo and Effect Return sends: an explicit
+/// "save this track" request should hand back exactly that track
+/// regardless of how mute/solo happen to be set elsewhere right now, and a
+/// return is a cross-track mix bus, not something that belongs to one
+/// isolated stem.
+pub fn render_track(
+    base_dir: &Path,
+    session_id: &str,
+    project: &RecordingProject,
+    track_source_id: &str,
+    output_name: &str,
+) -> Result<String, String> {
+    validate_session_id(session_id)?;
+    let dir = base_dir.join(session_id);
+
+    let manifest_json = std::fs::read_to_string(dir.join("manifest.json")).map_err(|e| e.to_string())?;
+    let manifest: RecordingManifest = serde_json::from_str(&manifest_json).map_err(|e| e.to_string())?;
+
+    let track = project
+        .tracks
+        .iter()
+        .find(|t| t.source_id == track_source_id)
+        .ok_or_else(|| format!("Unknown track: {track_source_id}"))?;
+    let track_manifest = manifest
+        .tracks
+        .iter()
+        .find(|t| t.source_id == track_source_id)
+        .ok_or_else(|| format!("No recorded audio for track: {track_source_id}"))?;
+
+    let timeline_frames = compute_timeline_frames(project)?;
+    let mut track_buf = render_track_buffer(track, track_manifest, &dir, timeline_frames)?;
+
+    for sample in track_buf.iter_mut() {
+        *sample = soft_limit(*sample);
+    }
+
+    let mixdown_dir = dir.join("mixdown");
+    std::fs::create_dir_all(&mixdown_dir).map_err(|e| e.to_string())?;
+    let output_file_name = unique_output_name(&mixdown_dir, output_name, &sanitize_component(track_source_id));
+    let output_path = mixdown_dir.join(&output_file_name);
+
+    let spec = hound::WavSpec {
+        channels: MASTER_CHANNELS as u16,
+        sample_rate: INTERNAL_SAMPLE_RATE,
+        bits_per_sample: 32,
+        sample_format: hound::SampleFormat::Float,
+    };
+    let mut writer = hound::WavWriter::create(&output_path, spec).map_err(|e| e.to_string())?;
+    for sample in &track_buf {
         writer.write_sample(*sample).map_err(|e| e.to_string())?;
     }
     writer.finalize().map_err(|e| e.to_string())?;
@@ -682,6 +845,7 @@ mod tests {
                         Clip { id: "a1".to_string(), source_start_frame: 0, length_frames: 200, timeline_start_frame: 0 },
                         Clip { id: "a2".to_string(), source_start_frame: 300, length_frames: 100, timeline_start_frame: 200 },
                     ],
+                    sends: HashMap::new(),
                 },
                 TrackProject {
                     source_id: "b".to_string(),
@@ -691,8 +855,11 @@ mod tests {
                     solo: false,
                     eq_bands: Vec::new(),
                     clips: vec![Clip { id: "b1".to_string(), source_start_frame: 0, length_frames: 300, timeline_start_frame: 0 }],
+                    sends: HashMap::new(),
                 },
             ],
+            effect_returns: Vec::new(),
+            tempo_bpm: default_tempo_bpm(),
         };
 
         let output_name = render_mixdown(&base_dir, &session_id, &project, "mix").expect("render failed");
@@ -713,6 +880,92 @@ mod tests {
         // Muted track B contributes nothing: frame 50 is exactly track A's
         // value alone, not track A + track B's 0.9.
         assert!((at(50) - 0.05).abs() < 1e-5);
+
+        let _ = std::fs::remove_dir_all(&base_dir);
+    }
+
+    /// Confirms `render_track` exports a single track's own edit list even
+    /// when that track is muted (an explicit "save this track" request
+    /// should hand back exactly that track regardless of the rest of the
+    /// project's current mute/solo state), applies that track's own
+    /// gain/pan, and rejects an unknown track id rather than silently
+    /// rendering nothing.
+    #[test]
+    fn render_track_exports_one_track_ignoring_mute_and_rejects_unknown_ids() {
+        let base_dir = scratch_dir("render_track_test");
+        let session_id = "rec_track_session".to_string();
+        let dir = base_dir.join(&session_id);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        write_test_wav(&dir.join("track_a.wav"), 1, &vec![0.2; 100]);
+        write_test_wav(&dir.join("track_b.wav"), 1, &vec![0.4; 100]);
+
+        let manifest = RecordingManifest {
+            session_id: session_id.clone(),
+            device_id: "dev".to_string(),
+            device_name: "Test Device".to_string(),
+            name: "Test".to_string(),
+            created_at_ms: 0,
+            tracks: vec![
+                TrackManifest {
+                    source_id: "a".to_string(),
+                    file: "track_a.wav".to_string(),
+                    channels: 1,
+                    sample_rate: INTERNAL_SAMPLE_RATE,
+                    duration_frames: 100,
+                },
+                TrackManifest {
+                    source_id: "b".to_string(),
+                    file: "track_b.wav".to_string(),
+                    channels: 1,
+                    sample_rate: INTERNAL_SAMPLE_RATE,
+                    duration_frames: 100,
+                },
+            ],
+        };
+        std::fs::write(dir.join("manifest.json"), serde_json::to_string_pretty(&manifest).unwrap()).unwrap();
+
+        let project = RecordingProject {
+            session_id: session_id.clone(),
+            tracks: vec![
+                TrackProject {
+                    source_id: "a".to_string(),
+                    gain: 1.0,
+                    pan: 0.0,
+                    muted: false,
+                    solo: false,
+                    eq_bands: Vec::new(),
+                    clips: vec![Clip { id: "a1".to_string(), source_start_frame: 0, length_frames: 100, timeline_start_frame: 0 }],
+                    sends: HashMap::new(),
+                },
+                TrackProject {
+                    source_id: "b".to_string(),
+                    gain: 2.0,
+                    pan: -1.0, // hard left
+                    muted: true, // single-track export must ignore this
+                    solo: false,
+                    eq_bands: Vec::new(),
+                    clips: vec![Clip { id: "b1".to_string(), source_start_frame: 0, length_frames: 100, timeline_start_frame: 0 }],
+                    sends: HashMap::new(),
+                },
+            ],
+            effect_returns: Vec::new(),
+            tempo_bpm: default_tempo_bpm(),
+        };
+
+        let output_name = render_track(&base_dir, &session_id, &project, "b", "b_export").expect("render_track failed");
+        let output_path = dir.join("mixdown").join(&output_name);
+        let mut reader = hound::WavReader::open(&output_path).expect("failed to open rendered track export");
+        assert_eq!(reader.spec().channels, 2);
+        let samples: Vec<f32> = reader.samples::<f32>().collect::<Result<_, _>>().unwrap();
+        assert_eq!(samples.len() / 2, 100);
+
+        // gain 2.0 * source 0.4 = 0.8; hard-left pan silences the right channel.
+        assert!((samples[0] - 0.8).abs() < 1e-5, "left channel should be the gain-applied source, got {}", samples[0]);
+        assert!(samples[1].abs() < 1e-5, "hard-left pan should silence the right channel, got {}", samples[1]);
+
+        let missing = render_track(&base_dir, &session_id, &project, "does-not-exist", "x");
+        assert!(missing.is_err(), "render_track should reject an unknown track id");
 
         let _ = std::fs::remove_dir_all(&base_dir);
     }
@@ -758,12 +1011,23 @@ mod tests {
             solo: false,
             eq_bands: Vec::new(),
             clips: vec![Clip { id: "a1".to_string(), source_start_frame: 0, length_frames: 200, timeline_start_frame: 0 }],
+            sends: HashMap::new(),
         };
 
-        let flat_project = RecordingProject { session_id: session_id.clone(), tracks: vec![base_track.clone()] };
+        let flat_project = RecordingProject {
+            session_id: session_id.clone(),
+            tracks: vec![base_track.clone()],
+            effect_returns: Vec::new(),
+            tempo_bpm: default_tempo_bpm(),
+        };
         let mut eq_track = base_track;
         eq_track.eq_bands = vec![EqBand { freq_hz: 8000.0, gain_db: 18.0, q: 1.0 }];
-        let eq_project = RecordingProject { session_id: session_id.clone(), tracks: vec![eq_track] };
+        let eq_project = RecordingProject {
+            session_id: session_id.clone(),
+            tracks: vec![eq_track],
+            effect_returns: Vec::new(),
+            tempo_bpm: default_tempo_bpm(),
+        };
 
         let flat_name = render_mixdown(&base_dir, &session_id, &flat_project, "flat").unwrap();
         let eq_name = render_mixdown(&base_dir, &session_id, &eq_project, "eq").unwrap();
@@ -896,12 +1160,18 @@ mod tests {
             solo: false,
             eq_bands: Vec::new(),
             clips: vec![Clip { id: "a1".to_string(), source_start_frame: 0, length_frames: 100, timeline_start_frame: 0 }],
+            sends: HashMap::new(),
         };
 
         let render_at_pan = |pan: f32| -> Vec<f32> {
             let mut track = base_track.clone();
             track.pan = pan;
-            let project = RecordingProject { session_id: session_id.clone(), tracks: vec![track] };
+            let project = RecordingProject {
+                session_id: session_id.clone(),
+                tracks: vec![track],
+                effect_returns: Vec::new(),
+                tempo_bpm: default_tempo_bpm(),
+            };
             let name = render_mixdown(&base_dir, &session_id, &project, &format!("pan_{pan}")).unwrap();
             hound::WavReader::open(dir.join("mixdown").join(name))
                 .unwrap()
@@ -921,6 +1191,111 @@ mod tests {
         let hard_right = render_at_pan(1.0);
         assert!(hard_right[0].abs() < 1e-5, "hard-right pan should silence the left channel, got {}", hard_right[0]);
         assert!((hard_right[1] - 0.5).abs() < 1e-5, "hard-right pan should leave the right channel untouched");
+
+        let _ = std::fs::remove_dir_all(&base_dir);
+    }
+
+    /// Confirms an EffectReturn actually reaches the mixdown: a track
+    /// sending into an enabled Delay return should produce an echo after
+    /// its dry hit, and disabling the return should silence that echo
+    /// without touching the dry signal - the wiring test for
+    /// `render_mixdown`'s return-bus loop, the same spirit as the EQ/pan
+    /// wiring tests above.
+    #[test]
+    fn render_mixdown_effect_return_delay_adds_an_echo_after_the_dry_signal() {
+        let base_dir = scratch_dir("render_return_test");
+        let session_id = "rec_return_session".to_string();
+        let dir = base_dir.join(&session_id);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // A single impulse at frame 0, silence afterward - any energy
+        // later in the render can only have come from the delay. Kept
+        // under soft_limit's 0.98 ceiling (see engine::soft_limit) so the
+        // dry sample survives the render completely untouched, rather than
+        // comparing against a value the limiter has already reshaped.
+        let mut samples = vec![0f32; 400];
+        samples[0] = 0.5;
+        write_test_wav(&dir.join("track_a.wav"), 1, &samples);
+
+        let manifest = RecordingManifest {
+            session_id: session_id.clone(),
+            device_id: "dev".to_string(),
+            device_name: "Test Device".to_string(),
+            name: "Test".to_string(),
+            created_at_ms: 0,
+            tracks: vec![TrackManifest {
+                source_id: "a".to_string(),
+                file: "track_a.wav".to_string(),
+                channels: 1,
+                sample_rate: INTERNAL_SAMPLE_RATE,
+                duration_frames: 400,
+            }],
+        };
+        std::fs::write(dir.join("manifest.json"), serde_json::to_string_pretty(&manifest).unwrap()).unwrap();
+
+        let return_id = "ret1".to_string();
+        // A round 5ms so the echo lands on an exact, easily-asserted sample
+        // index rather than one rounded from a fractional-ms delay.
+        let delay_ms = 5.0f32;
+        let delay_frames = (INTERNAL_SAMPLE_RATE as f32 * delay_ms / 1000.0).round() as usize;
+
+        let mut sends = HashMap::new();
+        sends.insert(return_id.clone(), 1.0f32);
+        let track = TrackProject {
+            source_id: "a".to_string(),
+            gain: 1.0,
+            pan: 0.0,
+            muted: false,
+            solo: false,
+            eq_bands: Vec::new(),
+            clips: vec![Clip { id: "a1".to_string(), source_start_frame: 0, length_frames: 400, timeline_start_frame: 0 }],
+            sends,
+        };
+
+        let make_project = |enabled: bool| RecordingProject {
+            session_id: session_id.clone(),
+            tracks: vec![track.clone()],
+            effect_returns: vec![EffectReturn {
+                id: return_id.clone(),
+                name: "Delay".to_string(),
+                enabled,
+                delay_ms,
+                feedback: 0.5,
+                mix: 1.0,
+            }],
+            tempo_bpm: default_tempo_bpm(),
+        };
+
+        let render = |enabled: bool, name: &str| -> Vec<f32> {
+            let project = make_project(enabled);
+            let output_name = render_mixdown(&base_dir, &session_id, &project, name).unwrap();
+            hound::WavReader::open(dir.join("mixdown").join(output_name))
+                .unwrap()
+                .samples::<f32>()
+                .collect::<Result<_, _>>()
+                .unwrap()
+        };
+
+        let with_return = render(true, "with_return");
+        let at = |samples: &Vec<f32>, frame: usize| samples[frame * 2];
+
+        assert!((at(&with_return, 0) - 0.5).abs() < 1e-5, "the dry impulse itself should be untouched");
+        assert!(
+            at(&with_return, delay_frames) > 0.1,
+            "expected an audible echo at the delay time, got {}",
+            at(&with_return, delay_frames)
+        );
+
+        let without_return = render(false, "without_return");
+        assert!(
+            (at(&without_return, 0) - 0.5).abs() < 1e-5,
+            "dry signal must be identical whether the return is enabled or not"
+        );
+        assert!(
+            at(&without_return, delay_frames).abs() < 1e-6,
+            "a disabled return must contribute no echo at all, got {}",
+            at(&without_return, delay_frames)
+        );
 
         let _ = std::fs::remove_dir_all(&base_dir);
     }

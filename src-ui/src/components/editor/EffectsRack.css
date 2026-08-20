@@ -7,6 +7,16 @@
   background: var(--bg-surface-alt);
   border: 1px solid var(--accent2);
   border-radius: var(--radius-md);
+  /* This track row can be much wider than the viewport once zoomed in
+     (see TrackLane.css's header) - without these, a column-flex item
+     stretches to that full width by default, leaving the actual controls
+     stranded at the left of a mostly-empty wide box. Sticky-left keeps it
+     in view even when scrolled away from the start of the timeline. */
+  align-self: flex-start;
+  width: 340px;
+  max-width: 100%;
+  position: sticky;
+  left: 10px;
 }
 
 .effects-rack-header {
