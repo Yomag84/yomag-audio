@@ -23,8 +23,7 @@ YomagAudioDriver.sys = 1
 DefaultDestDir = 12
 
 [YomagAudioDriver_Install]
-CopyFiles  = YomagAudioDriver.CopyFiles
-Interfaces = YomagAudioDriver_Install.Interfaces
+CopyFiles = YomagAudioDriver.CopyFiles
 
 [YomagAudioDriver.CopyFiles]
 YomagAudioDriver.sys
@@ -39,33 +38,54 @@ StartType      = 3
 ErrorControl   = 1
 ServiceBinary  = %12%\YomagAudioDriver.sys
 
-; Without these, PcRegisterSubdevice's "Topology"/"Wave" subdevices (see
-; driver.cpp's StartDevice - the reference strings below must match those
-; exact names) never get exposed as OS-visible device interfaces: portcls
-; loads and runs the driver fine either way, but sysaudio only discovers
-; audio filters through these KSCATEGORY_* device interfaces, so without
-; this section the adapter devnode comes up healthy while contributing zero
-; endpoints to WASAPI/mmdevapi - see
-; https://learn.microsoft.com/windows-hardware/drivers/audio/installing-device-interfaces-for-an-audio-adapter
+; ACX drivers run on KMDF, not raw WDM/PortCls, so the KMDF library the
+; INF asks the OS to load has to match what the driver was linked against
+; (see YomagAudioDriver.vcxproj's KMDF_VERSION_MAJOR/MINOR globals).
+[YomagAudioDriver_Install.Wdf]
+KmdfService = YomagAudioDriver, YomagAudioDriver_wdfsect
+
+[YomagAudioDriver_wdfsect]
+KmdfLibraryVersion = 1.31
+
+;
+; Render endpoint (the circuit built in rendercircuit.cpp, bridge pin
+; category KSNODETYPE_SPEAKER).
+;
+[YomagAudioDriver_Install.I.Speaker]
+AddReg = YomagAudioDriver_Install.I.Speaker.AddReg
+
+[YomagAudioDriver_Install.I.Speaker.AddReg]
+HKR,,CLSID,,%Proxy.CLSID%
+HKR,,FriendlyName,,%SpeakerDeviceName%
+HKR,EP\0,%PKEY_AudioEndpoint_Association%,,%KSNODETYPE_ANY%
+HKR,EP\0,%PKEY_AudioEndpoint_Supports_EventDriven_Mode%,0x00010001,0x1
+
+;
+; Capture endpoint (the circuit built in capturecircuit.cpp, bridge pin
+; category KSNODETYPE_MICROPHONE).
+;
+[YomagAudioDriver_Install.I.Microphone]
+AddReg = YomagAudioDriver_Install.I.Microphone.AddReg
+
+[YomagAudioDriver_Install.I.Microphone.AddReg]
+HKR,,CLSID,,%Proxy.CLSID%
+HKR,,FriendlyName,,%MicrophoneDeviceName%
+HKR,EP\0,%PKEY_AudioEndpoint_Association%,,%KSNODETYPE_ANY%
+HKR,EP\0,%PKEY_AudioEndpoint_Supports_EventDriven_Mode%,0x00010001,0x1
+
+;
+; Unlike PortCls, ACX circuits are self-contained (no separate Topology
+; filter to cross-wire) - a single KSCATEGORY_AUDIO + KSCATEGORY_RENDER/
+; CAPTURE + KSCATEGORY_REALTIME interface set per circuit is enough for
+; AudioEndpointBuilder to enumerate each as its own endpoint.
+;
 [YomagAudioDriver_Install.Interfaces]
-AddInterface = %KSCATEGORY_AUDIO%,%KSName_Wave%,YomagAudioDriver_Install.Wave
-AddInterface = %KSCATEGORY_RENDER%,%KSName_Wave%,YomagAudioDriver_Install.Wave
-AddInterface = %KSCATEGORY_CAPTURE%,%KSName_Wave%,YomagAudioDriver_Install.Wave
-AddInterface = %KSCATEGORY_TOPOLOGY%,%KSName_Topology%,YomagAudioDriver_Install.Topology
-
-[YomagAudioDriver_Install.Wave]
-AddReg = YomagAudioDriver_Install.Wave.AddReg
-
-[YomagAudioDriver_Install.Wave.AddReg]
-HKR,,FriendlyName,,%WaveDeviceName%
-HKR,,CLSID,,%Proxy.CLSID%
-
-[YomagAudioDriver_Install.Topology]
-AddReg = YomagAudioDriver_Install.Topology.AddReg
-
-[YomagAudioDriver_Install.Topology.AddReg]
-HKR,,FriendlyName,,%TopologyDeviceName%
-HKR,,CLSID,,%Proxy.CLSID%
+AddInterface = %KSCATEGORY_AUDIO%,    %KSName_Speaker%,    YomagAudioDriver_Install.I.Speaker
+AddInterface = %KSCATEGORY_RENDER%,   %KSName_Speaker%,    YomagAudioDriver_Install.I.Speaker
+AddInterface = %KSCATEGORY_REALTIME%, %KSName_Speaker%,    YomagAudioDriver_Install.I.Speaker
+AddInterface = %KSCATEGORY_AUDIO%,    %KSName_Microphone%, YomagAudioDriver_Install.I.Microphone
+AddInterface = %KSCATEGORY_CAPTURE%,  %KSName_Microphone%, YomagAudioDriver_Install.I.Microphone
+AddInterface = %KSCATEGORY_REALTIME%, %KSName_Microphone%, YomagAudioDriver_Install.I.Microphone
 
 [Strings]
 ProviderString      = "YomagAudio"
@@ -73,12 +93,15 @@ ManufacturerString  = "YomagAudio"
 DiskId1             = "YomagAudio Virtual Cable Installation Disk"
 DeviceDesc          = "YomagAudio Virtual Cable"
 ServiceDesc         = "YomagAudio Virtual Cable Driver"
-WaveDeviceName       = "YomagAudio Virtual Cable Wave"
-TopologyDeviceName   = "YomagAudio Virtual Cable Topology"
-KSName_Wave          = "Wave"
-KSName_Topology      = "Topology"
+SpeakerDeviceName    = "YomagAudio Virtual Cable Speaker"
+MicrophoneDeviceName = "YomagAudio Virtual Cable Microphone"
+KSName_Speaker       = "Speaker0"
+KSName_Microphone    = "Microphone0"
 KSCATEGORY_AUDIO     = "{6994AD04-93EF-11D0-A3CC-00A0C9223196}"
 KSCATEGORY_RENDER    = "{65E8773E-8F56-11D0-A3B9-00A0C9223196}"
 KSCATEGORY_CAPTURE   = "{65E8773D-8F56-11D0-A3B9-00A0C9223196}"
-KSCATEGORY_TOPOLOGY  = "{DDA54A40-1E4C-11D1-A050-405705C10000}"
+KSCATEGORY_REALTIME  = "{EB115FFC-10C8-4964-831D-6DCB02E6F23F}"
+KSNODETYPE_ANY       = "{00000000-0000-0000-0000-000000000000}"
 Proxy.CLSID          = "{17CCA71B-ECD7-11D0-B908-00A0C9223196}"
+PKEY_AudioEndpoint_Association               = "{1DA5D803-D492-4EDD-8C23-E0C0FFEE7F0E},2"
+PKEY_AudioEndpoint_Supports_EventDriven_Mode = "{1DA5D803-D492-4EDD-8C23-E0C0FFEE7F0E},7"

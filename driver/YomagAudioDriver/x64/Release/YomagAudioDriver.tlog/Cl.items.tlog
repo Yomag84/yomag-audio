@@ -1,6 +1,6 @@
 C:\Users\Abayomi\Documents\Project\YomagAudio\yomag-audio\driver\YomagAudioDriver\driver.cpp;C:\Users\Abayomi\Documents\Project\YomagAudio\yomag-audio\driver\YomagAudioDriver\x64\Release\driver.obj
 C:\Users\Abayomi\Documents\Project\YomagAudio\yomag-audio\driver\YomagAudioDriver\unknown.cpp;C:\Users\Abayomi\Documents\Project\YomagAudio\yomag-audio\driver\YomagAudioDriver\x64\Release\unknown.obj
 C:\Users\Abayomi\Documents\Project\YomagAudio\yomag-audio\driver\YomagAudioDriver\ringbuffer.cpp;C:\Users\Abayomi\Documents\Project\YomagAudio\yomag-audio\driver\YomagAudioDriver\x64\Release\ringbuffer.obj
-C:\Users\Abayomi\Documents\Project\YomagAudio\yomag-audio\driver\YomagAudioDriver\dmachannel.cpp;C:\Users\Abayomi\Documents\Project\YomagAudio\yomag-audio\driver\YomagAudioDriver\x64\Release\dmachannel.obj
-C:\Users\Abayomi\Documents\Project\YomagAudio\yomag-audio\driver\YomagAudioDriver\mintopology.cpp;C:\Users\Abayomi\Documents\Project\YomagAudio\yomag-audio\driver\YomagAudioDriver\x64\Release\mintopology.obj
-C:\Users\Abayomi\Documents\Project\YomagAudio\yomag-audio\driver\YomagAudioDriver\minwavecyclic.cpp;C:\Users\Abayomi\Documents\Project\YomagAudio\yomag-audio\driver\YomagAudioDriver\x64\Release\minwavecyclic.obj
+C:\Users\Abayomi\Documents\Project\YomagAudio\yomag-audio\driver\YomagAudioDriver\streamengine.cpp;C:\Users\Abayomi\Documents\Project\YomagAudio\yomag-audio\driver\YomagAudioDriver\x64\Release\streamengine.obj
+C:\Users\Abayomi\Documents\Project\YomagAudio\yomag-audio\driver\YomagAudioDriver\rendercircuit.cpp;C:\Users\Abayomi\Documents\Project\YomagAudio\yomag-audio\driver\YomagAudioDriver\x64\Release\rendercircuit.obj
+C:\Users\Abayomi\Documents\Project\YomagAudio\yomag-audio\driver\YomagAudioDriver\capturecircuit.cpp;C:\Users\Abayomi\Documents\Project\YomagAudio\yomag-audio\driver\YomagAudioDriver\x64\Release\capturecircuit.obj

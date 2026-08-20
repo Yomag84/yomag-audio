@@ -17,11 +17,20 @@
     <MinimumVisualStudioVersion>15.0</MinimumVisualStudioVersion>
     <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
     <EnableInf2cat>false</EnableInf2cat>
+    <!-- ACX 1.1 is the recommended version for all new driver development
+         (see learn.microsoft.com/windows-hardware/drivers/audio/acx-version-overview);
+         it requires KMDF 1.31+, first available on Windows 10 version 2004 -
+         the same minimum Windows version ACX itself has needed since its
+         initial release, not something this port raises further. -->
+    <ACX_VERSION_MAJOR>1</ACX_VERSION_MAJOR>
+    <ACX_VERSION_MINOR>1</ACX_VERSION_MINOR>
+    <KMDF_VERSION_MAJOR>1</KMDF_VERSION_MAJOR>
+    <KMDF_VERSION_MINOR>31</KMDF_VERSION_MINOR>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Label="Configuration">
     <ConfigurationType>Driver</ConfigurationType>
-    <DriverType>WDM</DriverType>
+    <DriverType>KMDF</DriverType>
     <DriverTargetPlatform>Desktop</DriverTargetPlatform>
     <PlatformToolset>WindowsKernelModeDriver10.0</PlatformToolset>
   </PropertyGroup>
@@ -37,29 +46,39 @@
     <TargetVersion>Windows10</TargetVersion>
   </PropertyGroup>
   <ItemDefinitionGroup>
+    <!-- Newer signtool.exe versions reject an omitted /fd digest algorithm
+         outright (older ones silently defaulted to SHA1); WindowsDriver.
+         Common.targets' TestSign target reads this from DriverSign item
+         metadata, not a plain property. -->
+    <DriverSign>
+      <FileDigestAlgorithm>SHA256</FileDigestAlgorithm>
+    </DriverSign>
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <RuntimeTypeInfo>false</RuntimeTypeInfo>
+      <AdditionalIncludeDirectories>$(DDK_INC_PATH)\acx\km\$(ACX_VERSION_MAJOR).$(ACX_VERSION_MINOR);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>ACX_VERSION_MAJOR=$(ACX_VERSION_MAJOR);ACX_VERSION_MINOR=$(ACX_VERSION_MINOR);KMDF_VERSION_MAJOR=$(KMDF_VERSION_MAJOR);KMDF_VERSION_MINOR=$(KMDF_VERSION_MINOR);%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>portcls.lib;ksguid.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>ksguid.lib;acx\km\$(ACX_VERSION_MAJOR).$(ACX_VERSION_MINOR)\acxstub.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="driver.cpp" />
     <ClCompile Include="unknown.cpp" />
     <ClCompile Include="ringbuffer.cpp" />
-    <ClCompile Include="dmachannel.cpp" />
-    <ClCompile Include="mintopology.cpp" />
-    <ClCompile Include="minwavecyclic.cpp" />
+    <ClCompile Include="streamengine.cpp" />
+    <ClCompile Include="rendercircuit.cpp" />
+    <ClCompile Include="capturecircuit.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="common.h" />
     <ClInclude Include="public.h" />
+    <ClInclude Include="context.h" />
     <ClInclude Include="ringbuffer.h" />
-    <ClInclude Include="dmachannel.h" />
-    <ClInclude Include="mintopology.h" />
-    <ClInclude Include="minwavecyclic.h" />
+    <ClInclude Include="streamengine.h" />
+    <ClInclude Include="rendercircuit.h" />
+    <ClInclude Include="capturecircuit.h" />
     <ClInclude Include="driver.h" />
   </ItemGroup>
   <ItemGroup>
