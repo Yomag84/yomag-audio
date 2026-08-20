@@ -19,7 +19,7 @@ captured to its own track — and edited afterward in a built-in multitrack
 editor (trim, split, move, per-track gain/mute/solo/EQ) before exporting a
 final mixdown.
 
-**[⬇ Download YomagAudio v0.1.0 for Windows x64](https://github.com/Yomag84/yomag-audio/releases/download/v0.1.0/YomagAudio_0.1.0_x64-setup.exe)**
+**[⬇ Download YomagAudio v0.1.1 for Windows x64](https://github.com/Yomag84/yomag-audio/releases/download/v0.1.1/YomagAudio_0.1.1_x64-setup.exe)**
 — installer, no separate driver download needed (see
 [Getting started](#getting-started) for what the driver bundling does and
 doesn't do). All [releases](https://github.com/Yomag84/yomag-audio/releases).
@@ -202,7 +202,7 @@ yomag-audio/
 
 ### Download (prebuilt installer)
 
-**[Download YomagAudio v0.1.0](https://github.com/Yomag84/yomag-audio/releases/download/v0.1.0/YomagAudio_0.1.0_x64-setup.exe)**
+**[Download YomagAudio v0.1.1](https://github.com/Yomag84/yomag-audio/releases/download/v0.1.1/YomagAudio_0.1.1_x64-setup.exe)**
 — a single NSIS installer, no separate driver download. It also carries the
 optional kernel driver's files (see [The kernel driver](#the-kernel-driver-optional-advanced)
 below) but does **not** install, sign, or load them — you'll see a one-time
